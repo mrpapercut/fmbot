@@ -1,4 +1,6 @@
-<h1>.fmbot</h1>
+<h1>.fmbot 3.0</h1>
+
+FMBot 3.0 rewrite based on: https://github.com/BramEsendam/BotTemplate
 
 [![Build status](https://ci.appveyor.com/api/projects/status/7bl2caa1wcpp9yta?svg=true)](https://ci.appveyor.com/project/Bitl/fmbot-discord)
 
