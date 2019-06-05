@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.28307.271
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.28922.388
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot", "Bot\Bot.csproj", "{91D25E9C-06C9-4EFB-9B05-2BCD17D3EABC}"
 EndProject
@@ -17,9 +17,13 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Persistence.Domain", "B
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Persistence", "Bot.Persistence\Bot.Persistence.csproj", "{9545C041-254D-449E-AFA2-794D38CB6997}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.BotLists", "Bot.BotLists\Bot.BotLists.csproj", "{FDD03954-4290-4847-B30F-0A7247AFD896}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.BotLists", "Bot.BotLists\Bot.BotLists.csproj", "{FDD03954-4290-4847-B30F-0A7247AFD896}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.BotLists.Interfaces", "Bot.BotLists.Interfaces\Bot.BotLists.Interfaces.csproj", "{61777FA6-7FE8-4469-8C0D-0559533F0EA4}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.BotLists.Interfaces", "Bot.BotLists.Interfaces\Bot.BotLists.Interfaces.csproj", "{61777FA6-7FE8-4469-8C0D-0559533F0EA4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.LastFM", "Bot.LastFM\Bot.LastFM.csproj", "{F6970D32-A6B8-485A-8E30-4DAED20200E4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.LastFM.Interfaces", "Bot.LastFM.Interfaces\Bot.LastFM.Interfaces.csproj", "{D8C3ED48-179C-4B1C-A071-605D5E592443}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -63,6 +67,14 @@ Global
 		{61777FA6-7FE8-4469-8C0D-0559533F0EA4}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{61777FA6-7FE8-4469-8C0D-0559533F0EA4}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{61777FA6-7FE8-4469-8C0D-0559533F0EA4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6970D32-A6B8-485A-8E30-4DAED20200E4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6970D32-A6B8-485A-8E30-4DAED20200E4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6970D32-A6B8-485A-8E30-4DAED20200E4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6970D32-A6B8-485A-8E30-4DAED20200E4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8C3ED48-179C-4B1C-A071-605D5E592443}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8C3ED48-179C-4B1C-A071-605D5E592443}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8C3ED48-179C-4B1C-A071-605D5E592443}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8C3ED48-179C-4B1C-A071-605D5E592443}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
