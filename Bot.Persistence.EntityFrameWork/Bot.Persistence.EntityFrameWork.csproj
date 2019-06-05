@@ -24,8 +24,4 @@
     <ProjectReference Include="..\Bot.Persistence\Bot.Persistence.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Folder Include="Migrations\" />
-  </ItemGroup>
-
 </Project>

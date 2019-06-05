@@ -19,7 +19,7 @@ namespace Bot.Persistence.EntityFrameWork.Configurations
             builder.HasAlternateKey(x => x.TimeStamp);
 
             builder.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
-            builder.Property(x => x.ServerId).HasColumnName("serverid").IsRequired();
+            builder.Property(x => x.ServerId).HasColumnName("serverid");
             builder.Property(x => x.UserId).HasColumnName("userid").IsRequired();
             builder.Property(x => x.Command).HasColumnName("command").IsRequired();
             builder.Property(x => x.ErrorMessage).HasColumnName("errormessage").IsRequired(false);
