@@ -30,7 +30,7 @@ namespace Bot.Discord.Commands.BotInfoCommands
         [RequireBotPermission(GuildPermission.EmbedLinks)]
         public async Task PingAsync()
         {
-            _embed.WithTitle("Info for" + Context.User.Username);
+            _embed.WithTitle("Info for " + Context.User.Username);
             _embed.WithDescription($"{Context.Client.Latency} ms");
             _embed.WithColor(new Color(255, 255, 255));
             await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);

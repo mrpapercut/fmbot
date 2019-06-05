@@ -109,12 +109,16 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 context.Message.HasMentionPrefix(_client.CurrentUser, ref argPos))
             {
                 await HandleCommandAsync(context, argPos).ConfigureAwait(false);
+                return;
             }
 
             // Check if the message has a valid custom command prefix.
             var customPrefix = _prefixService.GetPrefix(context.Guild.Id);
             if (customPrefix == null) return;
-            if (context.Message.HasStringPrefix(customPrefix, ref argPos, StringComparison.CurrentCultureIgnoreCase)) await HandleCommandAsync(context, argPos).ConfigureAwait(false);
+            if (context.Message.HasStringPrefix(customPrefix, ref argPos, StringComparison.CurrentCultureIgnoreCase))
+            {
+                await HandleCommandAsync(context, argPos).ConfigureAwait(false);
+            }
         }
 
 
@@ -127,13 +131,18 @@ namespace Bot.Discord.Handlers.CommandHandlers
         {
             try
             {
-
                 // Start a stopwatch to log the runtime. 
-                var stopwatch = new Stopwatch();
-                stopwatch.Start();
+                var stopwatch = Stopwatch.StartNew();
+                bool mainCommand = false;
 
                 // Searching for the command that should be executed.
                 var searchResult = _commandService.Search(context, argPos);
+
+                if (context.Message.Content.EndsWith("fm") || context.Message.Content.Contains("fm "))
+                {
+                    searchResult = _commandService.Search(context, "fm");
+                    mainCommand = true;
+                }
 
                 // If no command were found, return.
                 if (searchResult.Commands == null || searchResult.Commands.Count == 0)
@@ -151,7 +160,11 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 }
 
                 // Execute the command.
-                var result = await _commandService.ExecuteAsync(context, argPos, _services).ConfigureAwait(false);
+                IResult result;
+                if (mainCommand)
+                    result = await _commandService.ExecuteAsync(context, "fm", _services).ConfigureAwait(false);
+                else
+                    result = await _commandService.ExecuteAsync(context, argPos, _services).ConfigureAwait(false);
 
                 // If result of the command is is un success full, send a embedded error message.
                 // Warning: This will only be false if the input is wrong and not when a error is occuring while the command is running.
@@ -159,7 +172,10 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 {
                     _logger.Log("Error", result.ErrorReason, context.Message.Content, context.User.Username, context.Guild.Name, context.Guild.Id);
                     var embed = await _commandInputErrorHandler.HandleErrorsAsync(result, context).ConfigureAwait(false);
-                    if (embed != null) await context.Channel.SendMessageAsync("", false, embed.Build()).ConfigureAwait(false);
+                    if (embed != null)
+                    {
+                        await context.Channel.SendMessageAsync("", false, embed.Build()).ConfigureAwait(false);
+                    }
                 }
 
                 stopwatch.Stop();

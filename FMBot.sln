@@ -21,9 +21,13 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.BotLists", "Bot.BotList
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.BotLists.Interfaces", "Bot.BotLists.Interfaces\Bot.BotLists.Interfaces.csproj", "{61777FA6-7FE8-4469-8C0D-0559533F0EA4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.LastFM", "Bot.LastFM\Bot.LastFM.csproj", "{F6970D32-A6B8-485A-8E30-4DAED20200E4}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.LastFM", "Bot.LastFM\Bot.LastFM.csproj", "{F6970D32-A6B8-485A-8E30-4DAED20200E4}"
+	ProjectSection(ProjectDependencies) = postProject
+		{D8C3ED48-179C-4B1C-A071-605D5E592443} = {D8C3ED48-179C-4B1C-A071-605D5E592443}
+		{A52E7C49-5068-4B47-A8C8-0F629F9D3975} = {A52E7C49-5068-4B47-A8C8-0F629F9D3975}
+	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bot.LastFM.Interfaces", "Bot.LastFM.Interfaces\Bot.LastFM.Interfaces.csproj", "{D8C3ED48-179C-4B1C-A071-605D5E592443}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.LastFM.Interfaces", "Bot.LastFM.Interfaces\Bot.LastFM.Interfaces.csproj", "{D8C3ED48-179C-4B1C-A071-605D5E592443}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
