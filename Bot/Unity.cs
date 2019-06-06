@@ -11,6 +11,7 @@ using Bot.Interfaces.Discord;
 using Bot.Interfaces.Discord.Handlers;
 using Bot.Interfaces.Discord.Handlers.CommandHandlers;
 using Bot.Interfaces.Discord.Services;
+using Bot.LastFM.Helpers;
 using Bot.Logger.Interfaces;
 using Bot.Persistence.EntityFrameWork;
 using Bot.Persistence.EntityFrameWork.Repositories;
@@ -66,6 +67,9 @@ namespace Bot
             container.RegisterType<ICommandInputErrorHandler, CommandInputErrorHandler>(new PerThreadLifetimeManager());
             container.RegisterType<ICommandHandler, CommandHandler>(new PerThreadLifetimeManager());
             container.RegisterType<ISpamFilter, SpamFilter>(new PerThreadLifetimeManager());
+
+            // LastFM
+            container.RegisterType<ValidationHelper>(new PerResolveLifetimeManager());
 
 
             // DI for Entity framework

@@ -5,6 +5,7 @@ using Bot.Discord.Timers;
 using Bot.Interfaces.Discord.Handlers;
 using Bot.Interfaces.Discord.Handlers.CommandHandlers;
 using Bot.Interfaces.Discord.Services;
+using Bot.LastFM.Helpers;
 using Discord;
 using Discord.WebSocket;
 using IConnection = Bot.Interfaces.Discord.IConnection;
@@ -17,6 +18,7 @@ namespace Bot.Discord
         private readonly IClientLogHandler _clientLogHandler;
         private readonly ICommandHandler _commandHandler;
         private readonly IPrefixService _prefixService;
+        private readonly ApiTester _lastFMApiTester;
         private readonly DiscordBotListsUpdateTimer _botListsUpdateTimer;
 
 
@@ -28,13 +30,14 @@ namespace Bot.Discord
         /// <param name="commandHandler">The <see cref="ICommandHandler"/> that will handle all the commands.</param>
         /// <param name="prefixService">The <see cref="IPrefixService"/> That will be used for the custom prefixes.</param>
         /// <param name="botListsUpdateTimer">The timer that will be used to active UpdateBotListStatsAsync().</param>
-        public Connection(DiscordShardedClient client, IClientLogHandler clientLogHandler, ICommandHandler commandHandler, IPrefixService prefixService, DiscordBotListsUpdateTimer botListsUpdateTimer)
+        public Connection(DiscordShardedClient client, IClientLogHandler clientLogHandler, ICommandHandler commandHandler, IPrefixService prefixService, DiscordBotListsUpdateTimer botListsUpdateTimer, ApiTester apiTester)
         {
             _client = client;
             _clientLogHandler = clientLogHandler;
             _commandHandler = commandHandler;
             _prefixService = prefixService;
             _botListsUpdateTimer = botListsUpdateTimer;
+            _lastFMApiTester = apiTester;
         }
 
 
@@ -47,6 +50,9 @@ namespace Bot.Discord
 
             // Initialize all the client logging
             _clientLogHandler.Initialize();
+
+            // Check Last.FM keys
+            await _lastFMApiTester.CheckApiKeyAsync();
 
             // Load all the custom prefixes
             await _prefixService.LoadAllPrefixes().ConfigureAwait(false);

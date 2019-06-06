@@ -4,6 +4,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 16.0.28922.388
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot", "Bot\Bot.csproj", "{91D25E9C-06C9-4EFB-9B05-2BCD17D3EABC}"
+	ProjectSection(ProjectDependencies) = postProject
+		{F6970D32-A6B8-485A-8E30-4DAED20200E4} = {F6970D32-A6B8-485A-8E30-4DAED20200E4}
+	EndProjectSection
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Logger", "Bot.Logger\Bot.Logger.csproj", "{D8838C5B-6D1A-417D-9376-8BB9180425D9}"
 EndProject

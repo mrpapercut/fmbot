@@ -1,6 +1,7 @@
 ﻿using System.Linq;
 using System.Threading.Tasks;
 using Bot.Discord.Helpers;
+using Bot.LastFM.Helpers;
 using Bot.Logger.Interfaces;
 using Discord;
 using Discord.Commands;
@@ -8,29 +9,38 @@ using Discord.WebSocket;
 
 namespace Bot.Discord.Commands.LastFMCommands
 {
-    [Name("Tracks")]
-    public class TrackCommands : ModuleBase<SocketCommandContext>
+    [Name("Settings")]
+    public class SettingCommands : ModuleBase<SocketCommandContext>
     {
         private readonly ILogger _logger;
         private readonly DiscordShardedClient _shardedClient;
         private readonly EmbedBuilder _embed;
+        private readonly ValidationHelper _validationHelper;
 
-        public TrackCommands(ILogger logger, DiscordShardedClient shardedClient)
+        public SettingCommands(ILogger logger, DiscordShardedClient shardedClient)
         {
             _logger = logger;
             _shardedClient = shardedClient;
             _embed = new EmbedBuilder();
+            _validationHelper = new ValidationHelper();
         }
 
 
         /// <summary>
         /// Sends the ping of the shard that is connected to the server where the command is requested.
         /// </summary>
-        [Command("fm", RunMode = RunMode.Async)]
+        [Command("set", RunMode = RunMode.Async)]
         [RequireBotPermission(GuildPermission.EmbedLinks)]
-        public async Task FMAsync()
+        public async Task SetAsync(string lastFMUserName)
         {
-            var color = new Color();
+            if (!await _validationHelper.LastFMUserExistsAsync(lastFMUserName))
+            {
+                _embed.WithTitle("Error while attempting to set Last.FM username");
+                _embed.WithDescription("The username could not be found. Please double check if you spelled it correctly.");
+                _embed.WithColor(Constants.WarningColorOrange);
+                await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
+                return;
+            }
 
             _embed.WithTitle("Info for " + Context.User.Username);
             _embed.WithDescription($"{Context.Client.Latency} ms");

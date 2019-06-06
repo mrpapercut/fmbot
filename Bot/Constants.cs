@@ -1,4 +1,6 @@
-﻿namespace Bot
+﻿using Discord;
+
+namespace Bot
 {
 
     /// <summary>
@@ -37,6 +39,13 @@
 
         /// <summary>The string for a red status emoji.</summary>
         public const string RedStatusEmoji = "<:RedStatus:533010751074467851>";
+
+
+        /// <summary>The Discord color for the red Last.FM color.</summary>
+        public static Color LastFMColorRed = new Color(186, 0, 0);
+
+        /// <summary>The Discord color for a warning embed.</summary>
+        public static Color WarningColorOrange = new Color(255, 174, 66);
 
 
         /// <summary>The id of the support server.</summary>

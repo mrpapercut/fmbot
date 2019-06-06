@@ -25,7 +25,7 @@ namespace Bot.Persistence.EntityFrameWork.Configurations
             builder.Property(x => x.CommandUsed).HasColumnName("commandused").IsRequired();
             builder.Property(x => x.CommandSpam).HasColumnName("commandspam").IsRequired();
             builder.Property(x => x.Featured).HasColumnName("featured");
-            builder.Property(x => x.LastFMUserName).HasColumnName("lastfmusername").IsRequired();
+            builder.Property(x => x.LastFMUserName).HasColumnName("lastfmusername");
             builder.Property(x => x.DefaultTimeSpan).HasColumnName("defaulttimespan").IsRequired();
             builder.Property(x => x.UserType).HasColumnName("usertype").IsRequired();
             builder.Property(x => x.DefaultFMType).HasColumnName("defaultfmtype").IsRequired();
