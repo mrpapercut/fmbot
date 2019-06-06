@@ -16,8 +16,7 @@ namespace Bot.Persistence.EntityFrameWork.Configurations
         public void Configure(EntityTypeBuilder<Request> builder)
         {
             builder.ToTable("requests");
-            builder.HasKey(x => x.Id);
-            builder.HasAlternateKey(x => x.TimeStamp);
+            builder.HasKey(q => new { q.TimeStamp, q.Id });
 
             builder.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
             builder.Property(x => x.ServerId).HasColumnName("serverid");

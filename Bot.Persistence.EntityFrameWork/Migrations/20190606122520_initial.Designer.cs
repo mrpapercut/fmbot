@@ -10,7 +10,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Bot.Persistence.EntityFrameWork.Migrations
 {
     [DbContext(typeof(BotContext))]
-    [Migration("20190606122056_initial")]
+    [Migration("20190606122520_initial")]
     partial class initial
     {
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -23,6 +23,9 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
 
             modelBuilder.Entity("Bot.Persistence.Domain.Entities.Request", b =>
                 {
+                    b.Property<DateTime>("TimeStamp")
+                        .HasColumnName("timestamp");
+
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnName("id");
@@ -44,16 +47,11 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                         .HasConversion(new ValueConverter<decimal, decimal>(v => default(decimal), v => default(decimal), new ConverterMappingHints(precision: 20, scale: 0)))
                         .HasColumnName("serverid");
 
-                    b.Property<DateTime>("TimeStamp")
-                        .HasColumnName("timestamp");
-
                     b.Property<decimal>("UserId")
                         .HasConversion(new ValueConverter<decimal, decimal>(v => default(decimal), v => default(decimal), new ConverterMappingHints(precision: 20, scale: 0)))
                         .HasColumnName("userid");
 
-                    b.HasKey("Id");
-
-                    b.HasAlternateKey("TimeStamp");
+                    b.HasKey("TimeStamp", "Id");
 
                     b.HasIndex("ServerId");
 

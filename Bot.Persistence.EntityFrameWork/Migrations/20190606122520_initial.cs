@@ -51,18 +51,17 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                 {
                     id = table.Column<long>(nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.SerialColumn),
+                    timestamp = table.Column<DateTime>(nullable: false),
                     command = table.Column<string>(nullable: false),
                     errormessage = table.Column<string>(nullable: true),
                     issuccessfull = table.Column<bool>(nullable: false),
-                    timestamp = table.Column<DateTime>(nullable: false),
                     runtime = table.Column<long>(nullable: false),
                     serverid = table.Column<decimal>(nullable: true),
                     userid = table.Column<decimal>(nullable: false)
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_requests", x => x.id);
-                    table.UniqueConstraint("AK_requests_timestamp", x => x.timestamp);
+                    table.PrimaryKey("PK_requests", x => new { x.timestamp, x.id });
                     table.ForeignKey(
                         name: "FK_requests_servers_serverid",
                         column: x => x.serverid,
