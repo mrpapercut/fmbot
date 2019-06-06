@@ -1,5 +1,6 @@
 ﻿using System.Threading.Tasks;
 using Bot.Persistence.Domain;
+using Bot.Persistence.Domain.Entities;
 
 namespace Bot.Persistence.Repositories
 {

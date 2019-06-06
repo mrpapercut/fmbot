@@ -1,10 +1,9 @@
 ﻿using System;
 
-namespace Bot.Persistence.Domain
+namespace Bot.Persistence.Domain.Entities
 {
     public class Request
     {
-
         /// <summary>The id of the request.</summary>
         public long Id { get; set; }
 

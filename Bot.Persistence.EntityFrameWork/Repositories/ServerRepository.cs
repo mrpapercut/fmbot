@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Bot.Persistence.Domain;
+using Bot.Persistence.Domain.Entities;
 using Bot.Persistence.Models;
 using Bot.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;

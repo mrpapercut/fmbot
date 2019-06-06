@@ -1,4 +1,6 @@
-﻿using Bot.Persistence.Domain;
+﻿using System.Diagnostics.CodeAnalysis;
+using Bot.Persistence.Domain;
+using Bot.Persistence.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -8,10 +10,9 @@ namespace Bot.Persistence.EntityFrameWork.Configurations
     /// <summary>
     /// This class contains the configurations for the <see cref="Request"/> table. 
     /// </summary>
+    [SuppressMessage("ReSharper", "StringLiteralTypo")]
     public class RequestsConfiguration : IEntityTypeConfiguration<Request>
     {
-
-
         public void Configure(EntityTypeBuilder<Request> builder)
         {
             builder.ToTable("requests");

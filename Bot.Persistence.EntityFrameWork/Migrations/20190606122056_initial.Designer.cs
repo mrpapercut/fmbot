@@ -10,8 +10,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Bot.Persistence.EntityFrameWork.Migrations
 {
     [DbContext(typeof(BotContext))]
-    [Migration("20190604144942_InitialCreate")]
-    partial class InitialCreate
+    [Migration("20190606122056_initial")]
+    partial class initial
     {
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
@@ -21,7 +21,7 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                 .HasAnnotation("ProductVersion", "2.2.4-servicing-10062")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
-            modelBuilder.Entity("Bot.Persistence.Domain.Request", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.Request", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
@@ -40,7 +40,7 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.Property<long>("RunTime")
                         .HasColumnName("runtime");
 
-                    b.Property<decimal>("ServerId")
+                    b.Property<decimal?>("ServerId")
                         .HasConversion(new ValueConverter<decimal, decimal>(v => default(decimal), v => default(decimal), new ConverterMappingHints(precision: 20, scale: 0)))
                         .HasColumnName("serverid");
 
@@ -53,6 +53,8 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("TimeStamp");
+
                     b.HasIndex("ServerId");
 
                     b.HasIndex("UserId");
@@ -60,7 +62,7 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.ToTable("requests");
                 });
 
-            modelBuilder.Entity("Bot.Persistence.Domain.Server", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.Server", b =>
                 {
                     b.Property<decimal>("Id")
                         .ValueGeneratedOnAdd()
@@ -88,7 +90,7 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.ToTable("servers");
                 });
 
-            modelBuilder.Entity("Bot.Persistence.Domain.User", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.User", b =>
                 {
                     b.Property<decimal>("Id")
                         .ValueGeneratedOnAdd()
@@ -101,6 +103,19 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.Property<DateTime>("CommandUsed")
                         .HasColumnName("commandused");
 
+                    b.Property<int>("DefaultFMType")
+                        .HasColumnName("defaultfmtype");
+
+                    b.Property<int>("DefaultTimeSpan")
+                        .HasColumnName("defaulttimespan");
+
+                    b.Property<bool?>("Featured")
+                        .HasColumnName("featured");
+
+                    b.Property<string>("LastFMUserName")
+                        .IsRequired()
+                        .HasColumnName("lastfmusername");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnName("name");
@@ -111,19 +126,21 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.Property<int>("TotalTimesTimedOut")
                         .HasColumnName("timestimedout");
 
+                    b.Property<int>("UserType")
+                        .HasColumnName("usertype");
+
                     b.HasKey("Id");
 
                     b.ToTable("users");
                 });
 
-            modelBuilder.Entity("Bot.Persistence.Domain.Request", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.Request", b =>
                 {
-                    b.HasOne("Bot.Persistence.Domain.Server", "Server")
+                    b.HasOne("Bot.Persistence.Domain.Entities.Server", "Server")
                         .WithMany("Requests")
-                        .HasForeignKey("ServerId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .HasForeignKey("ServerId");
 
-                    b.HasOne("Bot.Persistence.Domain.User", "User")
+                    b.HasOne("Bot.Persistence.Domain.Entities.User", "User")
                         .WithMany("Requests")
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade);

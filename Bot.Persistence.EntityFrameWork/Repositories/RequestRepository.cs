@@ -1,4 +1,5 @@
 ﻿using Bot.Persistence.Domain;
+using Bot.Persistence.Domain.Entities;
 using Bot.Persistence.Repositories;
 
 namespace Bot.Persistence.EntityFrameWork.Repositories

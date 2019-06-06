@@ -7,6 +7,7 @@ using Bot.Interfaces.Discord.Handlers.CommandHandlers;
 using Bot.Interfaces.Discord.Services;
 using Bot.Logger.Interfaces;
 using Bot.Persistence.Domain;
+using Bot.Persistence.Domain.Entities;
 using Bot.Persistence.UnitOfWorks;
 using Discord;
 using Discord.Commands;

@@ -1,11 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace Bot.Persistence.Domain
+namespace Bot.Persistence.Domain.Entities
 {
     public class Server
     {
-
         /// <summary>The id of the server.</summary>
         public ulong Id { get; set; }
 

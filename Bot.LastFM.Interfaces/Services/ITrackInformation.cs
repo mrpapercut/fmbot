@@ -14,7 +14,7 @@ namespace Bot.LastFM.Interfaces.Services
         /// <param name="guildCounts">The amount of server the client is in.</param>
         /// <param name="shardIds">The shard id.</param>
         /// <returns>An awaitable <see cref="Task"/>.</returns>
-        Task UpdateBotListStatsAsync(ulong botId, int shardCount, int[] guildCounts, int[] shardIds);
+        Task UpdateBotListStatsAsync(string lastFMUserName, int amountOfTracks);
 
     }
 }

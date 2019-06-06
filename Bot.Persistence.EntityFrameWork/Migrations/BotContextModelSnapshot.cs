@@ -19,7 +19,7 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                 .HasAnnotation("ProductVersion", "2.2.4-servicing-10062")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
-            modelBuilder.Entity("Bot.Persistence.Domain.Request", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.Request", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
@@ -60,7 +60,7 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.ToTable("requests");
                 });
 
-            modelBuilder.Entity("Bot.Persistence.Domain.Server", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.Server", b =>
                 {
                     b.Property<decimal>("Id")
                         .ValueGeneratedOnAdd()
@@ -88,7 +88,7 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.ToTable("servers");
                 });
 
-            modelBuilder.Entity("Bot.Persistence.Domain.User", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.User", b =>
                 {
                     b.Property<decimal>("Id")
                         .ValueGeneratedOnAdd()
@@ -101,6 +101,19 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.Property<DateTime>("CommandUsed")
                         .HasColumnName("commandused");
 
+                    b.Property<int>("DefaultFMType")
+                        .HasColumnName("defaultfmtype");
+
+                    b.Property<int>("DefaultTimeSpan")
+                        .HasColumnName("defaulttimespan");
+
+                    b.Property<bool?>("Featured")
+                        .HasColumnName("featured");
+
+                    b.Property<string>("LastFMUserName")
+                        .IsRequired()
+                        .HasColumnName("lastfmusername");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnName("name");
@@ -111,18 +124,21 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     b.Property<int>("TotalTimesTimedOut")
                         .HasColumnName("timestimedout");
 
+                    b.Property<int>("UserType")
+                        .HasColumnName("usertype");
+
                     b.HasKey("Id");
 
                     b.ToTable("users");
                 });
 
-            modelBuilder.Entity("Bot.Persistence.Domain.Request", b =>
+            modelBuilder.Entity("Bot.Persistence.Domain.Entities.Request", b =>
                 {
-                    b.HasOne("Bot.Persistence.Domain.Server", "Server")
+                    b.HasOne("Bot.Persistence.Domain.Entities.Server", "Server")
                         .WithMany("Requests")
                         .HasForeignKey("ServerId");
 
-                    b.HasOne("Bot.Persistence.Domain.User", "User")
+                    b.HasOne("Bot.Persistence.Domain.Entities.User", "User")
                         .WithMany("Requests")
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade);

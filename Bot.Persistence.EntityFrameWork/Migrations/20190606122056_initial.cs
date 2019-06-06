@@ -4,7 +4,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 namespace Bot.Persistence.EntityFrameWork.Migrations
 {
-    public partial class InitialCreate : Migration
+    public partial class initial : Migration
     {
         protected override void Up(MigrationBuilder migrationBuilder)
         {
@@ -33,7 +33,12 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     commandused = table.Column<DateTime>(nullable: false),
                     timestimedout = table.Column<int>(nullable: false),
                     spamwarning = table.Column<int>(nullable: false),
-                    commandspam = table.Column<int>(nullable: false)
+                    commandspam = table.Column<int>(nullable: false),
+                    featured = table.Column<bool>(nullable: true),
+                    lastfmusername = table.Column<string>(nullable: false),
+                    defaulttimespan = table.Column<int>(nullable: false),
+                    usertype = table.Column<int>(nullable: false),
+                    defaultfmtype = table.Column<int>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -51,18 +56,19 @@ namespace Bot.Persistence.EntityFrameWork.Migrations
                     issuccessfull = table.Column<bool>(nullable: false),
                     timestamp = table.Column<DateTime>(nullable: false),
                     runtime = table.Column<long>(nullable: false),
-                    serverid = table.Column<decimal>(nullable: false),
+                    serverid = table.Column<decimal>(nullable: true),
                     userid = table.Column<decimal>(nullable: false)
                 },
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_requests", x => x.id);
+                    table.UniqueConstraint("AK_requests_timestamp", x => x.timestamp);
                     table.ForeignKey(
                         name: "FK_requests_servers_serverid",
                         column: x => x.serverid,
                         principalTable: "servers",
                         principalColumn: "id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_requests_users_userid",
                         column: x => x.userid,
