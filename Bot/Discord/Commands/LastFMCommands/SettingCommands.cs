@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Bot.Discord.Helpers;
 using Bot.LastFM.Helpers;
 using Bot.Logger.Interfaces;
+using Bot.Persistence.UnitOfWorks;
 using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
@@ -42,11 +43,18 @@ namespace Bot.Discord.Commands.LastFMCommands
                 return;
             }
 
-            _embed.WithTitle("Info for " + Context.User.Username);
-            _embed.WithDescription($"{Context.Client.Latency} ms");
-            _embed.WithColor(new Color(255, 255, 255));
+            using (var unitOfWork = Unity.Resolve<IUnitOfWork>())
+            {
+                await unitOfWork.Users.GetOrAddUserAsync(Context.User.Id, Context.User.Username);
+                await unitOfWork.Users.AddOrUpdateLastFMUserName(Context.User.Id, lastFMUserName).ConfigureAwait(false);
+            }
+
+            _embed.WithTitle("FMBot settings changed");
+            _embed.WithDescription($"Last.FM username for {Context.User.Username} set to {lastFMUserName}");
+            _embed.WithColor(Constants.LastFMColorRed);
             await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
-            _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "FM");
+
+            _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "set");
         }
     }
 }

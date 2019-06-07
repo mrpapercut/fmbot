@@ -11,7 +11,6 @@ namespace Bot.Discord.Services
 {
     public class SpamFilter : ISpamFilter
     {
-
         /// <summary>
         /// A <see cref="List{T}"/> containing all the channel ids that are whitelisted from the spam filter.
         /// </summary>

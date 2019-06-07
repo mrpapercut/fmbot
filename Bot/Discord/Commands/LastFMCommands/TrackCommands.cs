@@ -30,8 +30,6 @@ namespace Bot.Discord.Commands.LastFMCommands
         [RequireBotPermission(GuildPermission.EmbedLinks)]
         public async Task FMAsync()
         {
-            var color = new Color();
-
             _embed.WithTitle("Info for " + Context.User.Username);
             _embed.WithDescription($"{Context.Client.Latency} ms");
             _embed.WithColor(new Color(255, 255, 255));

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Bot.LastFM.Configurations;
 using Bot.Logger.Interfaces;
@@ -17,7 +18,15 @@ namespace Bot.LastFM.Helpers
 
             if (lastFMUser.Status.ToString().Equals("BadApiKey"))
             {
-                Console.WriteLine("Warning! Invalid API key for Last.FM! Please set the keys in the LastFMConfig.json or the bot will not work properly.");
+                Console.WriteLine("Warning! Invalid API key for Last.FM! Please set the keys in the LastFMConfig.json! \n \n" +
+                                  "Exiting in 10 seconds...");
+
+                Thread.Sleep(10000);
+                Environment.Exit(0);
+            }
+            else
+            {
+                Console.WriteLine("Last.FM API test successful.");
             }
         }
     }
