@@ -30,9 +30,11 @@ namespace Bot.Discord.Commands.LastFMCommands
         [RequireBotPermission(GuildPermission.EmbedLinks)]
         public async Task FMAsync()
         {
+
+
             _embed.WithTitle("Info for " + Context.User.Username);
             _embed.WithDescription($"{Context.Client.Latency} ms");
-            _embed.WithColor(new Color(255, 255, 255));
+            _embed.WithColor(Constants.LastFMColorRed);
             await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
             _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "FM");
         }
