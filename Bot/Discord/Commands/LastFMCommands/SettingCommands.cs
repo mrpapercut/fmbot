@@ -46,7 +46,7 @@ namespace Bot.Discord.Commands.LastFMCommands
             using (var unitOfWork = Unity.Resolve<IUnitOfWork>())
             {
                 await unitOfWork.Users.GetOrAddUserAsync(Context.User.Id, Context.User.Username);
-                await unitOfWork.Users.AddOrUpdateLastFMUserName(Context.User.Id, lastFMUserName).ConfigureAwait(false);
+                await unitOfWork.Users.AddOrUpdateLastFMUserNameAsync(Context.User.Id, lastFMUserName).ConfigureAwait(false);
             }
 
             _embed.WithTitle("FMBot settings changed");

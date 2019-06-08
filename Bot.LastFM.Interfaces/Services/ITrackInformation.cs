@@ -1,20 +1,17 @@
-﻿using System.Threading.Tasks;
+﻿using Bot.Persistence.Domain.LastFM;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Bot.LastFM.Interfaces.Services
 {
-    public interface IBotListUpdater
+    public interface ITrackInformation
     {
-
-
         /// <summary>
-        /// Updates the stats for all the bot lists.
+        /// Get recent tracks
         /// </summary>
-        /// <param name="botId">The Id of the client.</param>
-        /// <param name="shardCount">The total amount of shards the client has.</param>
-        /// <param name="guildCounts">The amount of server the client is in.</param>
-        /// <param name="shardIds">The shard id.</param>
-        /// <returns>An awaitable <see cref="Task"/>.</returns>
-        Task UpdateBotListStatsAsync(string lastFMUserName, int amountOfTracks);
-
+        /// <param name="lastFMUserName">The Id of the client.</param>
+        /// <param name="amountOfTracks">The total amount of shards the client has.</param>
+        /// <returns>An list of tracks <see cref="IReadOnlyList"/>.</returns>
+        Task<IReadOnlyList<Track>> GetRecentTracksAsync(string lastFMUserName, int amountOfTracks);
     }
 }

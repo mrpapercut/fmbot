@@ -2,6 +2,7 @@
 using System.Threading.Tasks;
 using Bot.Discord.Helpers;
 using Bot.Logger.Interfaces;
+using Bot.Persistence.UnitOfWorks;
 using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
@@ -30,13 +31,26 @@ namespace Bot.Discord.Commands.LastFMCommands
         [RequireBotPermission(GuildPermission.EmbedLinks)]
         public async Task FMAsync()
         {
+            using (var unitOfWork = Unity.Resolve<IUnitOfWork>())
+            {
+                var user = await unitOfWork.Users.GetUserAsync(Context.User.Id).ConfigureAwait(false);
+
+                if (user == null || user.LastFMUserName == null)
+                {
+                    _embed.WithTitle("Error while attempting get latest tracks");
+                    _embed.WithDescription("Last.FM username has not been set");
+                    _embed.WithColor(Constants.WarningColorOrange);
+                    await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
+                    return;
+                }
 
 
-            _embed.WithTitle("Info for " + Context.User.Username);
-            _embed.WithDescription($"{Context.Client.Latency} ms");
-            _embed.WithColor(Constants.LastFMColorRed);
-            await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
-            _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "FM");
+                _embed.WithTitle("Info for " + Context.User.Username);
+                _embed.WithDescription($"{Context.Client.Latency} ms");
+                _embed.WithColor(Constants.LastFMColorRed);
+                await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
+                _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "FM");
+            }
         }
     }
 }

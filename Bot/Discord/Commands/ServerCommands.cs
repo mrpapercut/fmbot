@@ -59,7 +59,7 @@ namespace Bot.Discord.Commands
                 await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
                 await unitOfWork.SaveAsync().ConfigureAwait(false);
 
-                _logger.Log($"Server: {Context.Guild}, Id: {Context.Guild.Id} || ShardId: {Context.Client.ShardId} || Channel: {Context.Channel} || User: {Context.User} || Used: prefix");
+                _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "prefix");
             }
         }
 
@@ -89,7 +89,8 @@ namespace Bot.Discord.Commands
                 await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
                 await unitOfWork.SaveAsync().ConfigureAwait(false);
 
-                _logger.Log($"Server: {Context.Guild}, Id: {Context.Guild.Id} || ShardId: {Context.Client.ShardId} || Channel: {Context.Channel} || User: {Context.User} || Used: remove prefix");
+                _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "remove prefix");
+
             }
         }
     }

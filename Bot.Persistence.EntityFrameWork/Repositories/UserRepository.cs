@@ -44,7 +44,7 @@ namespace Bot.Persistence.EntityFrameWork.Repositories
             }
         }
 
-        public async Task AddOrUpdateLastFMUserName(ulong id, string lastFMUsername)
+        public async Task AddOrUpdateLastFMUserNameAsync(ulong id, string lastFMUsername)
         {
             try
             {
@@ -53,6 +53,19 @@ namespace Bot.Persistence.EntityFrameWork.Repositories
                 user.LastFMUserName = lastFMUsername;
 
                 await Context.SaveChangesAsync().ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+        public async Task<User> GetUserAsync(ulong id)
+        {
+            try
+            {
+                return await Context.Set<User>().FirstOrDefaultAsync(x => x.Id == id).ConfigureAwait(false);
             }
             catch (Exception e)
             {

@@ -22,7 +22,14 @@ namespace Bot.Persistence.Repositories
         /// <param name="id">The id of the user.</param>
         /// <param name="lastFMUsername">The Last.FM username of the user.</param>
         /// <returns>An awaitable <see cref="Task"/>.</returns>
-        Task AddOrUpdateLastFMUserName(ulong id, string lastFMUsername);
+        Task AddOrUpdateLastFMUserNameAsync(ulong id, string lastFMUsername);
+
+        /// <summary>
+        /// Gets user
+        /// </summary>
+        /// <param name="id">The id of the user.</param>
+        /// <returns>An awaitable <see cref="Task"/>.</returns>
+        Task<User> GetUserAsync(ulong id);
     }
 }
 
