@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace Bot.Persistence.Domain.Enums
+﻿namespace Bot.Domain.Enums
 {
     public enum LastFMTimespan
     {

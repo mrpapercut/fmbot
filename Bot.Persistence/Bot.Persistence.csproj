@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Bot.Persistence.Domain\Bot.Persistence.Domain.csproj" />
+    <ProjectReference Include="..\Bot.Persistence.Domain\Bot.Domain.csproj" />
   </ItemGroup>
 
 </Project>

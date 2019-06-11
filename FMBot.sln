@@ -16,7 +16,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Interfaces", "Bot.Inter
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Persistence.EntityFrameWork", "Bot.Persistence.EntityFrameWork\Bot.Persistence.EntityFrameWork.csproj", "{2EEE2817-EF61-4D77-922F-5CA49F632801}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Persistence.Domain", "Bot.Persistence.Domain\Bot.Persistence.Domain.csproj", "{7934A3DF-7350-4E5D-9059-7A6FB5AAF0D4}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Domain", "Bot.Persistence.Domain\Bot.Domain.csproj", "{7934A3DF-7350-4E5D-9059-7A6FB5AAF0D4}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Bot.Persistence", "Bot.Persistence\Bot.Persistence.csproj", "{9545C041-254D-449E-AFA2-794D38CB6997}"
 EndProject
