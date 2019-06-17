@@ -18,8 +18,6 @@ namespace Bot.Domain.LastFM
 
         public string ArtistMbid { get; set; }
 
-        public LastImageSet ArtistImages { get; set; }
-
         public Uri ArtistUrl { get; set; }
 
         public Uri Url { get; set; }
@@ -33,8 +31,6 @@ namespace Bot.Domain.LastFM
         public int? PlayCount { get; set; }
 
         public int? UserPlayCount { get; set; }
-
-        public IEnumerable<LastTag> TopTags { get; set; }
 
         public DateTimeOffset? TimePlayed { get; set; }
 
