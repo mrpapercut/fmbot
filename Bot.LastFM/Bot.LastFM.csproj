@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Bot.LastFM.Interfaces\Bot.LastFM.Interfaces.csproj" />
     <ProjectReference Include="..\Bot.Logger.Interfaces\Bot.Logger.Interfaces.csproj" />
+    <ProjectReference Include="..\Bot.Persistence.Domain\Bot.Domain.csproj" />
     <ProjectReference Include="..\Bot.Persistence.EntityFrameWork\Bot.Persistence.EntityFrameWork.csproj" />
   </ItemGroup>
 

@@ -22,7 +22,7 @@ namespace Bot.Domain.LastFM
 
         public Uri Url { get; set; }
 
-        public LastImageSet Images { get; set; }
+        public Image Images { get; set; }
 
         public string AlbumName { get; set; }
 
