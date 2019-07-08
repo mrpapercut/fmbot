@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Threading.Tasks;
 using Bot.Domain.Persistence;
-using Bot.Persistence.Domain;
 using Bot.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 

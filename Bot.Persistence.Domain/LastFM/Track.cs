@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Bot.Domain.LastFM
 {
-    class Track
+    public class Track
     {
         public string Id { get; set; }
 

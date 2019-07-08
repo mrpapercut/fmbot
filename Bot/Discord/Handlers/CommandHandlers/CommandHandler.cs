@@ -6,8 +6,9 @@ using System.Threading.Tasks;
 using Bot.Domain.Persistence;
 using Bot.Interfaces.Discord.Handlers.CommandHandlers;
 using Bot.Interfaces.Discord.Services;
+using Bot.LastFM.Interfaces.Services;
+using Bot.LastFM.Services;
 using Bot.Logger.Interfaces;
-using Bot.Persistence.Domain;
 using Bot.Persistence.UnitOfWorks;
 using Discord;
 using Discord.Commands;
@@ -58,6 +59,7 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 .AddSingleton(_client)
                 .AddSingleton(_commandService)
                 .AddScoped<ILogger, Logger.Logger>()
+                .AddScoped<ITrackInformation, TrackInformation>()
                 .BuildServiceProvider();
 
             // Add all commands and services to the command service.

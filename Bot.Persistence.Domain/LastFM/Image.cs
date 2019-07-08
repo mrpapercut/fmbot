@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Bot.Domain.LastFM
 {
-    class Image
+    public class Image
     {
         public Uri Small { get; set; }
 

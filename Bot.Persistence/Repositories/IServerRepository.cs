@@ -1,7 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Threading.Tasks;
 using Bot.Domain.Persistence;
-using Bot.Persistence.Domain;
 using Bot.Persistence.Models;
 
 namespace Bot.Persistence.Repositories

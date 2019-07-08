@@ -2,7 +2,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using Bot.Domain.Persistence;
-using Bot.Persistence.Domain;
 using Bot.Persistence.EntityFrameWork.Configurations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
