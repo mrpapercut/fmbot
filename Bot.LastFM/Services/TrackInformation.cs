@@ -45,5 +45,10 @@ namespace Bot.LastFM.Services
                Mbid = s.Mbid
             }).ToList();
         }
+
+        public void Dispose()
+        {
+            _fmClient?.Dispose();
+        }
     }
 }

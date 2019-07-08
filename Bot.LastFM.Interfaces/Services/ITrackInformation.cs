@@ -1,10 +1,11 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Bot.Domain.LastFM;
 
 namespace Bot.LastFM.Interfaces.Services
 {
-    public interface ITrackInformation
+    public interface ITrackInformation : IDisposable
     {
         /// <summary>
         /// Get recent tracks
