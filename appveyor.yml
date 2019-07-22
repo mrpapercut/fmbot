@@ -13,6 +13,7 @@ nuget:
   account_feed: true
   project_feed: true
 before_build:
+- ps: cd src
 - ps: nuget restore
 build:
   publish_nuget: true
