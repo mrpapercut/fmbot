@@ -1,5 +1,5 @@
 version: '{branch}.{build}'
-image: Visual Studio 2017
+image: Visual Studio 2019
 configuration: Release
 init:
 - ps: $branch = $env:APPVEYOR_REPO_BRANCH -replace '\W', '-'; $env:ASSEMBLY_INFORMATIONAL_VERSION = if ($branch -eq "master") { $env:APPVEYOR_BUILD_VERSION } else { "$env:APPVEYOR_BUILD_VERSION-$branch" }
@@ -18,6 +18,6 @@ build:
   publish_nuget: true
   verbosity: minimal
 artifacts:
-- path: Bot\bin\$(configuration)
+- path: src\Bot\bin\$(configuration)
   name: BinaryRelease
 deploy: off
