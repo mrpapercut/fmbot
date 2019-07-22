@@ -1,4 +1,4 @@
-﻿using Bot.LastFM.Configurations;
+using Bot.LastFM.Configurations;
 using Bot.LastFM.Interfaces.Services;
 using IF.Lastfm.Core.Api;
 using System;
@@ -17,7 +17,7 @@ namespace Bot.LastFM.Services
 
         public async Task<IReadOnlyList<Track>> GetRecentTracksAsync(string lastFMUserName, int amountOfTracks = 2)
         {
-            var tracks = await _fmClient.User.GetRecentScrobbles(lastFMUserName, null, 1, amountOfTracks).ConfigureAwait(false);
+            var tracks = await this._fmClient.User.GetRecentScrobbles(lastFMUserName, null, 1, amountOfTracks).ConfigureAwait(false);
 
             return tracks.Select(s => new Track
             {
@@ -48,7 +48,7 @@ namespace Bot.LastFM.Services
 
         public void Dispose()
         {
-            _fmClient?.Dispose();
+            this._fmClient?.Dispose();
         }
     }
 }

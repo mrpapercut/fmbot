@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Bot.Interfaces.Discord.Handlers.CommandHandlers;
 using Bot.Logger.Interfaces;
 using Discord;
@@ -14,8 +14,8 @@ namespace Bot.Discord.Handlers.CommandHandlers
         /// The default error message that will can be shown in the description of an embed.
         /// </summary>
         private const string DefaultErrorMessage =
-            "an unexpected error occurred. Pls try again.\n" +
-            "Join [UPDATE](https://discord.ggINVITE) discord if nothing changes!";
+            "An unexpected error occurred. Please try again.\n" +
+            "Please join [the .fmbot support Discord](https://discord.gg/jY2zTZg) if nothing changes!";
 
 
         /// <summary>

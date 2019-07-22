@@ -1,4 +1,4 @@
-﻿using System.Linq;
+using System.Linq;
 using System.Threading.Tasks;
 using Bot.Discord.Helpers;
 using Bot.LastFM.Helpers;
@@ -20,10 +20,10 @@ namespace Bot.Discord.Commands.LastFMCommands
 
         public SettingCommands(ILogger logger, DiscordShardedClient shardedClient)
         {
-            _logger = logger;
-            _shardedClient = shardedClient;
-            _embed = new EmbedBuilder();
-            _validationHelper = new ValidationHelper();
+            this._logger = logger;
+            this._shardedClient = shardedClient;
+            this._embed = new EmbedBuilder();
+            this._validationHelper = new ValidationHelper();
         }
 
 
@@ -34,12 +34,12 @@ namespace Bot.Discord.Commands.LastFMCommands
         [RequireBotPermission(GuildPermission.EmbedLinks)]
         public async Task SetAsync(string lastFMUserName)
         {
-            if (!await _validationHelper.LastFMUserExistsAsync(lastFMUserName))
+            if (!await this._validationHelper.LastFMUserExistsAsync(lastFMUserName))
             {
-                _embed.WithTitle("Error while attempting to set Last.FM username");
-                _embed.WithDescription("The username could not be found. Please double check if you spelled it correctly.");
-                _embed.WithColor(Constants.WarningColorOrange);
-                await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
+                this._embed.WithTitle("Error while attempting to set Last.FM username");
+                this._embed.WithDescription("The username could not be found. Please double check if you spelled it correctly.");
+                this._embed.WithColor(Constants.WarningColorOrange);
+                await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
                 return;
             }
 
@@ -49,12 +49,14 @@ namespace Bot.Discord.Commands.LastFMCommands
                 await unitOfWork.Users.AddOrUpdateLastFMUserNameAsync(Context.User.Id, lastFMUserName).ConfigureAwait(false);
             }
 
-            _embed.WithTitle("FMBot settings changed");
-            _embed.WithDescription($"Last.FM username for {Context.User.Username} set to {lastFMUserName}");
-            _embed.WithColor(Constants.LastFMColorRed);
-            await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
+            this._embed.WithTitle("FMBot settings changed");
+            this._embed.WithDescription($"Last.FM username for {Context.User.Username} set to {lastFMUserName}");
+            this._embed.WithColor(Constants.LastFMColorRed);
+            await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
 
-            _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "set");
+            this._logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "set");
         }
+
+        
     }
 }

@@ -1,4 +1,4 @@
-﻿using Bot.BotLists.Interfaces.Services;
+using Bot.BotLists.Interfaces.Services;
 using Bot.BotLists.Services;
 using Bot.Discord;
 using Bot.Discord.Configurations;
@@ -7,7 +7,6 @@ using Bot.Discord.Handlers.CommandHandlers;
 using Bot.Discord.Services;
 using Bot.Discord.Timers;
 using Bot.Interfaces;
-using Bot.Interfaces.Discord;
 using Bot.Interfaces.Discord.Handlers;
 using Bot.Interfaces.Discord.Handlers.CommandHandlers;
 using Bot.Interfaces.Discord.Services;
@@ -20,12 +19,14 @@ using Bot.Persistence.EntityFrameWork.Repositories;
 using Bot.Persistence.EntityFrameWork.UnitOfWorks;
 using Bot.Persistence.Repositories;
 using Bot.Persistence.UnitOfWorks;
+using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Unity;
 using Unity.Injection;
 using Unity.Lifetime;
 using Unity.Resolution;
+using IConnection = Bot.Interfaces.Discord.IConnection;
 
 namespace Bot
 {
@@ -73,9 +74,7 @@ namespace Bot
             // LastFM
             container.RegisterType<ValidationHelper>(new PerResolveLifetimeManager());
             container.RegisterType<ITrackInformation, TrackInformation>(new PerThreadLifetimeManager());
-
-
-
+            container.RegisterType<IUserInformation, UserInformation>(new PerThreadLifetimeManager());
 
             // DI for Entity framework
             container.RegisterType<BotContext>(new PerResolveLifetimeManager());
