@@ -37,9 +37,9 @@ namespace Bot.Discord.Handlers.CommandHandlers
 
 
         /// <inheritdoc />
-        public EmbedBuilder GetDefaultError(string result)
+        public EmbedBuilder GetDefaultError(string exception)
         {
-            this._logger.Log("UnHandledErrors", result);
+            this._logger.Log("UnHandledErrors", exception);
             return EmbedError("Generic error", DefaultErrorMessage);
         }
 

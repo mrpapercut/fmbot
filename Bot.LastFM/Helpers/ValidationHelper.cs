@@ -1,4 +1,4 @@
-﻿using System.Threading.Tasks;
+using System.Threading.Tasks;
 using Bot.LastFM.Configurations;
 using IF.Lastfm.Core.Api;
 
@@ -10,7 +10,7 @@ namespace Bot.LastFM.Helpers
 
         public async Task<bool> LastFMUserExistsAsync(string lastFMUserName)
         {
-            var lastFMUser = await _fmClient.User.GetInfoAsync(lastFMUserName).ConfigureAwait(false);
+            var lastFMUser = await this._fmClient.User.GetInfoAsync(lastFMUserName).ConfigureAwait(false);
 
             return lastFMUser.Success;
         }

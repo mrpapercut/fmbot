@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using Bot.Logger.Interfaces;
 
@@ -22,20 +22,16 @@ namespace Bot.Logger
             var filePath = $"Logs/{folder}/{DateTime.Now:MMMM, yyyy}";
             if (!File.Exists(filePath)) Directory.CreateDirectory(filePath);
             filePath += $"/{DateTime.Now:dddd, MMMM d, yyyy}.txt";
-            using (var file = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.None))
-            {
-                using (var sw = new StreamWriter(file))
-                {
-                    sw.WriteLine($"{DateTime.Now:T} : {text}");
-                }
-            }
+            using var file = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.None);
+            using var sw = new StreamWriter(file);
+            sw.WriteLine($"{DateTime.Now:T} : {text}");
         }
 
 
         /// <inheritdoc />
-        public void LogCommandUsed(ulong? id, int shardId, ulong channel, ulong userId, string commandName)
+        public void LogCommandUsed(ulong? id, int shardId, ulong channelId, ulong userId, string commandName)
         {
-            Log($"GuildId: {id} || ShardId: {shardId} || ChannelId: {channel} || UserId: {userId} || Used: {commandName}");
+            Log($"GuildId: {id} || ShardId: {shardId} || ChannelId: {channelId} || UserId: {userId} || Used: {commandName}");
         }
 
 
@@ -46,17 +42,14 @@ namespace Bot.Logger
             if (!File.Exists(filePath)) Directory.CreateDirectory(filePath);
 
             filePath += $"/{DateTime.Now:dddd, MMMM d, yyyy}.txt";
-            using (var file = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.None))
-            {
-                using (var sw = new StreamWriter(file))
-                {
-                    sw.WriteLine($"{DateTime.Now:T} : {errorReason}");
-                    sw.WriteLine($"{DateTime.Now:T} : {message}");
-                    sw.WriteLine($"{DateTime.Now:T} : User: {username}");
-                    sw.WriteLine($"{DateTime.Now:T} : Guild: {guildName} Id: {guildId}");
-                    sw.WriteLine("===========================================================");
-                }
-            }
+            using var file = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.None);
+            using var sw = new StreamWriter(file);
+
+            sw.WriteLine($"{DateTime.Now:T} : {errorReason}");
+            sw.WriteLine($"{DateTime.Now:T} : {message}");
+            sw.WriteLine($"{DateTime.Now:T} : User: {username}");
+            sw.WriteLine($"{DateTime.Now:T} : Guild: {guildName} | Id: {guildId}");
+            sw.WriteLine("====================================");
         }
     }
 }

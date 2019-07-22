@@ -1,11 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Bot.Domain.LastFM;
 
 namespace Bot.LastFM.Interfaces.Services
 {
-    public interface IUserInformation : IDisposable
+    public interface IUserInformation
     {
         /// <summary>
         /// Get user info

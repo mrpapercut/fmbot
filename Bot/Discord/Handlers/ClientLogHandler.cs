@@ -141,7 +141,6 @@ namespace Bot.Discord.Handlers
         /// <param name="shard">The shard that got connected.</param>
         private async Task ShardConnectedAsync(DiscordSocketClient shard)
         {
-
             try
             {
                 await Task.Delay(30 * 1000).ConfigureAwait(false);

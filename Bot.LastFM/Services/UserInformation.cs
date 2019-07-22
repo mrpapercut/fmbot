@@ -1,12 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using Bot.Domain.LastFM;
 using Bot.LastFM.Configurations;
 using Bot.LastFM.Interfaces.Services;
 using IF.Lastfm.Core.Api;
+using System.Threading.Tasks;
+using Bot.Logger.Interfaces;
 
 namespace Bot.LastFM.Services
 {
@@ -14,36 +11,44 @@ namespace Bot.LastFM.Services
     {
         private readonly LastfmClient _fmClient = new LastfmClient(RestClientsConfig.TokenConfig.LastFMKey, RestClientsConfig.TokenConfig.LastFMSecret);
 
-        public async Task<User> GetUserInfoAsync(string lastFMUserName)
-        {
-            var user = await this._fmClient.User.GetInfoAsync(lastFMUserName).ConfigureAwait(false);
+        private readonly ILogger _logger;
 
-            return new User()
-            {
-                Name = user.Content.Name,
-                FullName = user.Content.FullName,
-                Avatar = new Image
-                {
-                    Large = user.Content.Avatar.Large,
-                    Medium = user.Content.Avatar.Medium,
-                    Small = user.Content.Avatar.Small,
-                },
-                Id = user.Content.Id,
-                Age = user.Content.Age,
-                Country = user.Content.Country,
-                Gender = user.Content.Gender.ToString(),
-                IsSubscriber = user.Content.IsSubscriber,
-                Playcount = user.Content.Playcount,
-                Playlists = user.Content.Playlists,
-                TimeRegistered = user.Content.TimeRegistered,
-                Bootstrap = user.Content.Bootstrap,
-                Type = user.Content.Type
-            };
+        public UserInformation(ILogger logger)
+        {
+            this._logger = logger;
         }
 
-        public void Dispose()
+        public async Task<User> GetUserInfoAsync(string lastFMUserName)
         {
-            this._fmClient?.Dispose();
+            var userResult = await this._fmClient.User.GetInfoAsync(lastFMUserName).ConfigureAwait(false);
+
+            if (!userResult.Success)
+            {
+                this._logger.Log("Error", $"Last.FM error for GetUserInfoAsync: {userResult.Status}. Query: {lastFMUserName}");
+                return null;
+            }
+
+            return new User
+            {
+                Name = userResult.Content.Name,
+                FullName = userResult.Content.FullName,
+                Avatar = new Image
+                {
+                    Large = userResult.Content.Avatar.Large,
+                    Medium = userResult.Content.Avatar.Medium,
+                    Small = userResult.Content.Avatar.Small,
+                },
+                Id = userResult.Content.Id,
+                Age = userResult.Content.Age,
+                Country = userResult.Content.Country,
+                Gender = userResult.Content.Gender.ToString(),
+                IsSubscriber = userResult.Content.IsSubscriber,
+                Playcount = userResult.Content.Playcount,
+                Playlists = userResult.Content.Playlists,
+                TimeRegistered = userResult.Content.TimeRegistered,
+                Bootstrap = userResult.Content.Bootstrap,
+                Type = userResult.Content.Type
+            };
         }
     }
 }

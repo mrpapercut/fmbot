@@ -169,7 +169,7 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 else
                     result = await this._commandService.ExecuteAsync(context, argPos, this._services).ConfigureAwait(false);
 
-                // If result of the command is is un success full, send a embedded error message.
+                // If result of the command is is unsuccessfull, send a embedded error message.
                 // Warning: This will only be false if the input is wrong and not when a error is occuring while the command is running.
                 if (!result.IsSuccess)
                 {

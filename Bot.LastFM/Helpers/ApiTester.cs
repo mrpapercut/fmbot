@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Bot.LastFM.Configurations;
@@ -14,7 +14,7 @@ namespace Bot.LastFM.Helpers
         public async Task CheckApiKeyAsync()
         {
             Console.WriteLine("Checking Last.FM API...");
-            var lastFMUser = await _fmClient.User.GetInfoAsync("Lastfmsupport").ConfigureAwait(false);
+            var lastFMUser = await this._fmClient.User.GetInfoAsync("Lastfmsupport").ConfigureAwait(false);
 
             if (lastFMUser.Status.ToString().Equals("BadApiKey"))
             {
