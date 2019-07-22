@@ -1,0 +1,19 @@
+version: 1.0.{build}
+image: Visual Studio 2017
+init:
+- ps: $branch = $env:APPVEYOR_REPO_BRANCH -replace '\W', '-'; $env:ASSEMBLY_INFORMATIONAL_VERSION = if ($branch -eq "master") { $env:APPVEYOR_BUILD_VERSION } else { "$env:APPVEYOR_BUILD_VERSION-$branch" }
+assembly_info:
+  patch: true
+  file: '**\AssemblyInfo.*'
+  assembly_version: '{version}'
+  assembly_file_version: '{version}'
+  assembly_informational_version: '$(ASSEMBLY_INFORMATIONAL_VERSION)'
+nuget:
+  account_feed: true
+  project_feed: true
+before_build:
+- ps: nuget restore
+build:
+  publish_nuget: true
+  verbosity: minimal
+deploy: off
