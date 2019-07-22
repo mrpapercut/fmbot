@@ -16,4 +16,7 @@ before_build:
 build:
   publish_nuget: true
   verbosity: minimal
+artifacts:
+- path: Bot\bin\$(configuration)
+  name: BinaryRelease
 deploy: off
