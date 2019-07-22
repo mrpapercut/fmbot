@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Bot.Interfaces.Discord.Services;
@@ -24,7 +24,7 @@ namespace Bot.Discord.Services
         /// <inheritdoc />
         public async Task<bool> FilterAsync(SocketCommandContext context)
         {
-            if (_whiteListedChannels.Contains(context.Channel.Id)) return true;
+            if (this._whiteListedChannels.Contains(context.Channel.Id)) return true;
             using (var unitOfWork = Unity.Resolve<IUnitOfWork>())
             {
                 var user = await unitOfWork.Users.GetOrAddUserAsync(context.User.Id, context.User.Username).ConfigureAwait(false);

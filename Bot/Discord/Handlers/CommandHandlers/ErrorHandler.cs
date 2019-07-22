@@ -24,14 +24,14 @@ namespace Bot.Discord.Handlers.CommandHandlers
         /// <param name="logger">The <see cref="ILogger"/> that will be used to log all the messages.</param>
         public ErrorHandler(ILogger logger)
         {
-            _logger = logger;
+            this._logger = logger;
         }
 
 
         /// <inheritdoc />
         public EmbedBuilder GetDefaultError(string commandName, string message, string exception)
         {
-            _logger.Log("UnHandledErrors", $"Command: {commandName} Exception: {message} Exception info: {exception}");
+            this._logger.Log("UnHandledErrors", $"Command: {commandName} Exception: {message} Exception info: {exception}");
             return EmbedError("Generic error", DefaultErrorMessage);
         }
 
@@ -39,7 +39,7 @@ namespace Bot.Discord.Handlers.CommandHandlers
         /// <inheritdoc />
         public EmbedBuilder GetDefaultError(string result)
         {
-            _logger.Log("UnHandledErrors", result);
+            this._logger.Log("UnHandledErrors", result);
             return EmbedError("Generic error", DefaultErrorMessage);
         }
 

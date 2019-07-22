@@ -1,4 +1,4 @@
-﻿using System.Threading.Tasks;
+using System.Threading.Tasks;
 using Bot.Interfaces.Discord.Services;
 using Bot.Logger.Interfaces;
 using Bot.Persistence.UnitOfWorks;
@@ -19,8 +19,8 @@ namespace Bot.Discord.Commands
         /// <param name="logger">The logger that will log messages to the console.</param>
         public ServerCommands(ILogger logger)
         {
-            _logger = logger;
-            _embed = new EmbedBuilder();
+            this._logger = logger;
+            this._embed = new EmbedBuilder();
         }
 
 
@@ -46,20 +46,20 @@ namespace Bot.Discord.Commands
                 {
                     server.Prefix = prefix;
                     customPrefixService.StorePrefix(prefix, Context.Guild.Id);
-                    _embed.WithDescription("Successfully added custom prefix!\n" +
+                    this._embed.WithDescription("Successfully added custom prefix!\n" +
                                            $"Example **{prefix}ping**");
                 }
                 else
                 {
-                    _embed.WithDescription("You can't have a custom prefix that contains ** * **or **`** or **~**");
+                    this._embed.WithDescription("You can't have a custom prefix that contains ** * **or **`** or **~**");
                 }
 
-                _embed.WithColor(new Color(255, 255, 255));
+                this._embed.WithColor(new Color(255, 255, 255));
 
-                await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
+                await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
                 await unitOfWork.SaveAsync().ConfigureAwait(false);
 
-                _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "prefix");
+                this._logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "prefix");
             }
         }
 
@@ -83,13 +83,13 @@ namespace Bot.Discord.Commands
                 customPrefixService.RemovePrefix(Context.Guild.Id);
                 server.Prefix = null;
 
-                _embed.WithDescription("Successfully removed custom prefix.");
-                _embed.WithColor(new Color(255, 255, 255));
+                this._embed.WithDescription("Successfully removed custom prefix.");
+                this._embed.WithColor(new Color(255, 255, 255));
 
-                await ReplyAsync("", false, _embed.Build()).ConfigureAwait(false);
+                await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
                 await unitOfWork.SaveAsync().ConfigureAwait(false);
 
-                _logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "remove prefix");
+                this._logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "remove prefix");
 
             }
         }

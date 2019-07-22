@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Timers;
@@ -14,20 +14,20 @@ namespace Bot.Discord.Timers
 
         public DiscordBotListsUpdateTimer(DiscordShardedClient client, IBotListUpdater botListUpdater)
         {
-            _client = client;
-            _botListUpdater = botListUpdater;
+            this._client = client;
+            this._botListUpdater = botListUpdater;
         }
 
         private Timer _timer;
         internal Task TimerAsync()
         {
-            _timer = new Timer
+            this._timer = new Timer
             {
                 Interval = TimeSpan.FromMinutes(Constants.BotListUpdateMinutes).TotalMilliseconds,
                 AutoReset = true,
                 Enabled = true
             };
-            _timer.Elapsed += TimerElapsed;
+            this._timer.Elapsed += TimerElapsed;
             return Task.CompletedTask;
         }
 
@@ -46,9 +46,9 @@ namespace Bot.Discord.Timers
         /// </summary>
         private async Task UpdateStatsAsync()
         {
-            var guildCountArray = _client.Shards.Select(x => x.Guilds.Count).ToArray();
-            var shardIdArray = _client.Shards.Select(x => x.ShardId).ToArray();
-            await _botListUpdater.UpdateBotListStatsAsync(_client.CurrentUser.Id, _client.Shards.Count, guildCountArray, shardIdArray).ConfigureAwait(false);
+            var guildCountArray = this._client.Shards.Select(x => x.Guilds.Count).ToArray();
+            var shardIdArray = this._client.Shards.Select(x => x.ShardId).ToArray();
+            await this._botListUpdater.UpdateBotListStatsAsync(this._client.CurrentUser.Id, this._client.Shards.Count, guildCountArray, shardIdArray).ConfigureAwait(false);
         }
     }
 }

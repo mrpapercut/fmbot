@@ -1,4 +1,4 @@
-﻿using System.Linq;
+using System.Linq;
 using System.Threading.Tasks;
 using Bot.Interfaces.Discord.Handlers.CommandHandlers;
 using Bot.Interfaces.Discord.Services;
@@ -19,7 +19,7 @@ namespace Bot.Discord.Handlers.CommandHandlers
         /// <param name="prefixService"></param>
         public CommandInputErrorHandler(ILogger logger, IPrefixService prefixService) : base(logger)
         {
-            _prefixService = prefixService;
+            this._prefixService = prefixService;
         }
 
 
@@ -72,7 +72,7 @@ namespace Bot.Discord.Handlers.CommandHandlers
             // Checking what command what used to embed the correct error.
             var defaultPrefixErrorMessage = CheckForCommand(message, result, prefix);
             if (defaultPrefixErrorMessage != null) return defaultPrefixErrorMessage;
-            var customPrefix = _prefixService.GetPrefix(context.Guild.Id);
+            var customPrefix = this._prefixService.GetPrefix(context.Guild.Id);
             if (customPrefix != null)
             {
                 var customPrefixErrorMessage = CheckForCommand(message, result, customPrefix);

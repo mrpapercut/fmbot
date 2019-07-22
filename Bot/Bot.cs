@@ -1,4 +1,4 @@
-﻿using System.Threading.Tasks;
+using System.Threading.Tasks;
 using Bot.Interfaces;
 using Bot.Interfaces.Discord;
 
@@ -15,14 +15,14 @@ namespace Bot
         /// <param name="connection">The <see cref="IConnection"/> that will be used.</param>
         public Bot(IConnection connection)
         {
-            _connection = connection;
+            this._connection = connection;
         }
 
 
         /// <inheritdoc />
         public async Task StartAsync()
         {
-            await _connection.ConnectAsync().ConfigureAwait(false);
+            await this._connection.ConnectAsync().ConfigureAwait(false);
         }
     }
 }

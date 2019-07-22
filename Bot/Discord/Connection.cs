@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using Bot.Configurations;
 using Bot.Discord.Timers;
@@ -32,12 +32,12 @@ namespace Bot.Discord
         /// <param name="botListsUpdateTimer">The timer that will be used to active UpdateBotListStatsAsync().</param>
         public Connection(DiscordShardedClient client, IClientLogHandler clientLogHandler, ICommandHandler commandHandler, IPrefixService prefixService, DiscordBotListsUpdateTimer botListsUpdateTimer, ApiTester apiTester)
         {
-            _client = client;
-            _clientLogHandler = clientLogHandler;
-            _commandHandler = commandHandler;
-            _prefixService = prefixService;
-            _botListsUpdateTimer = botListsUpdateTimer;
-            _lastFMApiTester = apiTester;
+            this._client = client;
+            this._clientLogHandler = clientLogHandler;
+            this._commandHandler = commandHandler;
+            this._prefixService = prefixService;
+            this._botListsUpdateTimer = botListsUpdateTimer;
+            this._lastFMApiTester = apiTester;
         }
 
 
@@ -45,23 +45,23 @@ namespace Bot.Discord
         public async Task ConnectAsync()
         {
             // Start the connection to discord
-            await _client.LoginAsync(TokenType.Bot, ConfigData.Data.Token).ConfigureAwait(false);
-            await _client.StartAsync().ConfigureAwait(false);
+            await this._client.LoginAsync(TokenType.Bot, ConfigData.Data.Token).ConfigureAwait(false);
+            await this._client.StartAsync().ConfigureAwait(false);
 
             // Initialize all the client logging
-            _clientLogHandler.Initialize();
+            this._clientLogHandler.Initialize();
 
             // Check Last.FM keys
-            await _lastFMApiTester.CheckApiKeyAsync();
+            await this._lastFMApiTester.CheckApiKeyAsync();
 
             // Load all the custom prefixes
-            await _prefixService.LoadAllPrefixes().ConfigureAwait(false);
+            await this._prefixService.LoadAllPrefixes().ConfigureAwait(false);
 
-            await _commandHandler.InitializeAsync().ConfigureAwait(false);
+            await this._commandHandler.InitializeAsync().ConfigureAwait(false);
 
             // Wait the thread so the console application doesn't close.
             await Task.Delay(TimeSpan.FromDays(ConfigData.Data.RestartTime)).ConfigureAwait(false);
-            await _client.StopAsync().ConfigureAwait(false);
+            await this._client.StopAsync().ConfigureAwait(false);
             await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         }
     }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using Bot.Interfaces.Discord.Handlers;
 using Bot.Logger.Interfaces;
@@ -20,19 +20,19 @@ namespace Bot.Discord.Handlers
         /// <param name="logger">The <see cref="ILogger"/> that will be used to log all the messages.</param>
         public ClientLogHandler(DiscordShardedClient client, ILogger logger)
         {
-            _client = client;
-            _logger = logger;
+            this._client = client;
+            this._logger = logger;
         }
 
 
         /// <inheritdoc />
         public void Initialize()
         {
-            _client.Log += LogEvent;
-            _client.ShardLatencyUpdated += ShardLatencyEvent;
-            _client.ShardDisconnected += ShardDisconnectedEvent;
-            _client.ShardConnected += ShardConnectedEvent;
-            _client.JoinedGuild += ClientJoinedGuildEvent;
+            this._client.Log += LogEvent;
+            this._client.ShardLatencyUpdated += ShardLatencyEvent;
+            this._client.ShardDisconnected += ShardDisconnectedEvent;
+            this._client.ShardConnected += ShardConnectedEvent;
+            this._client.JoinedGuild += ClientJoinedGuildEvent;
         }
 
         /// <summary>
@@ -55,7 +55,7 @@ namespace Bot.Discord.Handlers
             Task.Run(() =>
             {
                 // If log message is a Serializer Error, Log the message to the SerializerError folder.
-                if (logMessage.Message.Contains("Serializer Error")) _logger.Log("SerializerError", $"Source: {logMessage.Source} Exception: {logMessage.Exception} Message: {logMessage.Message}");
+                if (logMessage.Message.Contains("Serializer Error")) this._logger.Log("SerializerError", $"Source: {logMessage.Source} Exception: {logMessage.Exception} Message: {logMessage.Message}");
                 Log(logMessage.Message);
             });
             return Task.CompletedTask;
@@ -70,10 +70,11 @@ namespace Bot.Discord.Handlers
         {
             if (message.Contains("Unknown User") || message.Contains("Unknown Guild"))
             {
-                _logger.Log("Unknown", message);
+                this._logger.Log("Unknown", message);
                 return;
             }
-            _logger.Log(message);
+
+            this._logger.Log(message);
         }
 
 
@@ -123,13 +124,13 @@ namespace Bot.Discord.Handlers
 
             try
             {
-                var channel = _client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.DisconnectEventChannelId);
+                var channel = this._client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.DisconnectEventChannelId);
                 await channel.SendMessageAsync($"<:RedStatus:519932993343586350> Shard: `{shard.ShardId}` Disconnected with the reason {exception.Message}").ConfigureAwait(false);
             }
             catch (Exception)
             {
                 // Logs the message to a txt file if it was unable to send the message.
-                _logger.Log("Connection/Disconnected", $"Shard: {shard.ShardId} reason: {exception.Message}");
+                this._logger.Log("Connection/Disconnected", $"Shard: {shard.ShardId} reason: {exception.Message}");
             }
         }
 
@@ -144,13 +145,13 @@ namespace Bot.Discord.Handlers
             try
             {
                 await Task.Delay(30 * 1000).ConfigureAwait(false);
-                var channel = _client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.ConnectEventChannelId);
+                var channel = this._client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.ConnectEventChannelId);
                 await channel.SendMessageAsync($"<:GreenStatus:519932750296514605> Shard: `{shard.ShardId}` Connected with {shard.Latency}ms").ConfigureAwait(false);
             }
             catch (Exception)
             {
                 // Logs the message to a txt file if it was unable to send the message.
-                _logger.Log("Connection/Connected", $"Shard: {shard.ShardId} with **{shard.Latency}** ms");
+                this._logger.Log("Connection/Connected", $"Shard: {shard.ShardId} with **{shard.Latency}** ms");
             }
         }
 
@@ -168,13 +169,13 @@ namespace Bot.Discord.Handlers
             if (updatePing < 500 && oldPing < 500) return;
             try
             {
-                var channel = _client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.LatencyUpdatedEventChannelId);
+                var channel = this._client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.LatencyUpdatedEventChannelId);
                 await channel.SendMessageAsync($"Shard: `{shard.ShardId}` Latency update from **{oldPing}** ms to **{updatePing}** ms").ConfigureAwait(false);
             }
             catch (Exception)
             {
                 // Logs the message to a txt file if it was unable to send the message.
-                _logger.Log("Connection/Latency", $"Shard: {shard.ShardId} Latency: {updatePing}");
+                this._logger.Log("Connection/Latency", $"Shard: {shard.ShardId} Latency: {updatePing}");
             }
         }
 
@@ -188,13 +189,13 @@ namespace Bot.Discord.Handlers
 
             try
             {
-                var channel = _client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.JoinGuildChannelId);
+                var channel = this._client.GetGuild(Constants.EventSeverId).GetTextChannel(Constants.JoinGuildChannelId);
                 await channel.SendMessageAsync($"Joined server: {guild.Name}, Id: {guild.Id}, MemberCount: {guild.MemberCount}.").ConfigureAwait(false);
             }
             catch (Exception)
             {
                 // Logs the message to a txt file if it was unable to send the message.
-                _logger.Log("Connection/Latency", $"Joined server: {guild.Name}, Id: {guild.Id}, MemberCount: {guild.MemberCount}.");
+                this._logger.Log("Connection/Latency", $"Joined server: {guild.Name}, Id: {guild.Id}, MemberCount: {guild.MemberCount}.");
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
@@ -42,31 +42,31 @@ namespace Bot.Discord.Handlers.CommandHandlers
         public CommandHandler(DiscordShardedClient client, CommandService commandService, ILogger logger, IPrefixService prefixService,
                               ICommandErrorHandler commandErrorHandler, ICommandInputErrorHandler commandInputErrorHandler, ISpamFilter spamFilter)
         {
-            _client = client;
-            _commandService = commandService;
-            _logger = logger;
-            _prefixService = prefixService;
-            _commandErrorHandler = commandErrorHandler;
-            _commandInputErrorHandler = commandInputErrorHandler;
-            _spamFilter = spamFilter;
+            this._client = client;
+            this._commandService = commandService;
+            this._logger = logger;
+            this._prefixService = prefixService;
+            this._commandErrorHandler = commandErrorHandler;
+            this._commandInputErrorHandler = commandInputErrorHandler;
+            this._spamFilter = spamFilter;
         }
 
         /// <inheritdoc />
         public async Task InitializeAsync()
         {
             // Add all objects that are needed for the commands.
-            _services = new ServiceCollection()
-                .AddSingleton(_client)
-                .AddSingleton(_commandService)
+            this._services = new ServiceCollection()
+                .AddSingleton(this._client)
+                .AddSingleton(this._commandService)
                 .AddScoped<ILogger, Logger.Logger>()
                 .AddScoped<ITrackInformation, TrackInformation>()
                 .BuildServiceProvider();
 
             // Add all commands and services to the command service.
-            await _commandService.AddModulesAsync(Assembly.GetEntryAssembly(), _services).ConfigureAwait(false);
+            await this._commandService.AddModulesAsync(Assembly.GetEntryAssembly(), this._services).ConfigureAwait(false);
 
-            _commandService.Log += LogCommandServiceEvent;
-            _client.MessageReceived += HandleCommandEvent;
+            this._commandService.Log += LogCommandServiceEvent;
+            this._client.MessageReceived += HandleCommandEvent;
         }
 
 
@@ -104,19 +104,19 @@ namespace Bot.Discord.Handlers.CommandHandlers
             if (msg.Author.IsBot) return;
 
             // Create the shared command context.
-            var context = new ShardedCommandContext(_client, msg);
+            var context = new ShardedCommandContext(this._client, msg);
             var argPos = 0;
 
             // Check if the message has a valid default command prefix.
             if (context.Message.HasStringPrefix(Constants.Prefix, ref argPos, StringComparison.CurrentCultureIgnoreCase) ||
-                context.Message.HasMentionPrefix(_client.CurrentUser, ref argPos))
+                context.Message.HasMentionPrefix(this._client.CurrentUser, ref argPos))
             {
                 await HandleCommandAsync(context, argPos).ConfigureAwait(false);
                 return;
             }
 
             // Check if the message has a valid custom command prefix.
-            var customPrefix = _prefixService.GetPrefix(context.Guild.Id);
+            var customPrefix = this._prefixService.GetPrefix(context.Guild.Id);
             if (customPrefix == null) return;
             if (context.Message.HasStringPrefix(customPrefix, ref argPos, StringComparison.CurrentCultureIgnoreCase))
             {
@@ -139,11 +139,11 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 bool mainCommand = false;
 
                 // Searching for the command that should be executed.
-                var searchResult = _commandService.Search(context, argPos);
+                var searchResult = this._commandService.Search(context, argPos);
 
                 if (context.Message.Content.EndsWith("fm") || context.Message.Content.Contains("fm "))
                 {
-                    searchResult = _commandService.Search(context, "fm");
+                    searchResult = this._commandService.Search(context, "fm");
                     mainCommand = true;
                 }
 
@@ -155,7 +155,7 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 }
 
                 // If the user is spamming commands, return.
-                if (!await _spamFilter.FilterAsync(context).ConfigureAwait(false))
+                if (!await this._spamFilter.FilterAsync(context).ConfigureAwait(false))
                 {
                     stopwatch.Stop();
                     await SaveRequestDataAsync(stopwatch, context, searchResult, false, "Blocked by spam filter").ConfigureAwait(false);
@@ -165,16 +165,16 @@ namespace Bot.Discord.Handlers.CommandHandlers
                 // Execute the command.
                 IResult result;
                 if (mainCommand)
-                    result = await _commandService.ExecuteAsync(context, "fm", _services).ConfigureAwait(false);
+                    result = await this._commandService.ExecuteAsync(context, "fm", this._services).ConfigureAwait(false);
                 else
-                    result = await _commandService.ExecuteAsync(context, argPos, _services).ConfigureAwait(false);
+                    result = await this._commandService.ExecuteAsync(context, argPos, this._services).ConfigureAwait(false);
 
                 // If result of the command is is un success full, send a embedded error message.
                 // Warning: This will only be false if the input is wrong and not when a error is occuring while the command is running.
                 if (!result.IsSuccess)
                 {
-                    _logger.Log("Error", result.ErrorReason, context.Message.Content, context.User.Username, context.Guild.Name, context.Guild.Id);
-                    var embed = await _commandInputErrorHandler.HandleErrorsAsync(result, context).ConfigureAwait(false);
+                    this._logger.Log("Error", result.ErrorReason, context.Message.Content, context.User.Username, context.Guild.Name, context.Guild.Id);
+                    var embed = await this._commandInputErrorHandler.HandleErrorsAsync(result, context).ConfigureAwait(false);
                     if (embed != null)
                     {
                         await context.Channel.SendMessageAsync("", false, embed.Build()).ConfigureAwait(false);
@@ -187,7 +187,7 @@ namespace Bot.Discord.Handlers.CommandHandlers
             catch (Exception e)
             {
                 // Logging any error that occur and that are not being handled by the error handlers.
-                _logger.Log("UnHandledErrors", "Command handler error: " + e);
+                this._logger.Log("UnHandledErrors", "Command handler error: " + e);
             }
         }
 
@@ -203,9 +203,9 @@ namespace Bot.Discord.Handlers.CommandHandlers
             // Warning: This will only be activated if an error occured while running the command.
             if (logMessage.Exception is CommandException commandException)
             {
-                var embed = await _commandErrorHandler.HandleErrorsAsync(commandException).ConfigureAwait(false);
+                var embed = await this._commandErrorHandler.HandleErrorsAsync(commandException).ConfigureAwait(false);
                 if (embed != null) await commandException.Context.Channel.SendMessageAsync("", false, embed.Build()).ConfigureAwait(false);
-                _logger.Log("CommandService/ErrorDetails", $"Message: {logMessage.Message}, exception: {logMessage.Exception}, source: {logMessage.Source}");
+                this._logger.Log("CommandService/ErrorDetails", $"Message: {logMessage.Message}, exception: {logMessage.Exception}, source: {logMessage.Source}");
             }
         }
 

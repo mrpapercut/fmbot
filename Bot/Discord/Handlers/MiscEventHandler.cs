@@ -1,4 +1,4 @@
-﻿using System.Threading.Tasks;
+using System.Threading.Tasks;
 using Bot.Interfaces.Discord.Handlers;
 using Bot.Persistence.UnitOfWorks;
 using Discord.WebSocket;
@@ -12,15 +12,15 @@ namespace Bot.Discord.Handlers
 
         public MiscEventHandler(DiscordShardedClient client)
         {
-            _client = client;
+            this._client = client;
         }
 
 
         /// <inheritdoc />
         public void Initialize()
         {
-            _client.JoinedGuild += JoinedGuildEvent;
-            _client.LeftGuild += LeftGuildEvent;
+            this._client.JoinedGuild += JoinedGuildEvent;
+            this._client.LeftGuild += LeftGuildEvent;
         }
 
 
