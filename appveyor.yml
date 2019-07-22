@@ -16,7 +16,6 @@ before_build:
 - ps: cd src
 - ps: nuget restore
 build:
-  publish_nuget: true
   verbosity: minimal
 artifacts:
 - path: src\Bot\bin\$(configuration)

@@ -80,15 +80,14 @@ namespace Bot.Discord.Commands.LastFMCommands
                 ? "*Now playing*"
                 : $"Last scrobble {this._tracks[0].TimePlayed?.ToString("R")}");
 
+            this._embedAuthor.WithIconUrl(Context.User.GetAvatarUrl());
+            this._embed.WithAuthor(this._embedAuthor);
+            this._embed.WithUrl("https://www.last.fm/user/" + this._user.LastFMUserName);
+
             var fmUser = await Unity.Resolve<IUserInformation>().GetUserInfoAsync(this._user.LastFMUserName);
 
             this._embedFooter.WithText($"{fmUser.Name} has {fmUser.Playcount} scrobbles.");
             this._embed.WithFooter(this._embedFooter);
-
-            this._embedAuthor.WithIconUrl(Context.User.GetAvatarUrl());
-            this._embed.WithAuthor(this._embedAuthor);
-
-            this._embed.WithUrl("https://www.last.fm/user/" + this._user.LastFMUserName);
 
             this._embed.WithColor(Constants.LastFMColorRed);
             await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
