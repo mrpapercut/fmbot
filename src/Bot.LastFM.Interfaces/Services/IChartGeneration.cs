@@ -12,7 +12,7 @@ namespace Bot.LastFM.Interfaces.Services
         /// <summary>
         /// Get album info
         /// </summary>
-        /// <param name="album">The album for which you want to make the chart.</param>
+        /// <param name="albums">The album for which you want to make the chart.</param>
         /// <param name="timespan">The timespan for the chart.</param>
         /// <param name="rows">The amount of rows for the chart.</param>
         /// <param name="columns">The amount of columns in the chart.</param>

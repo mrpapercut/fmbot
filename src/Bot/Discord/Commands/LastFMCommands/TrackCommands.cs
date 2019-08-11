@@ -45,7 +45,7 @@ namespace Bot.Discord.Commands.LastFMCommands
 
             if (this._user?.LastFMUserName == null)
             {
-                await UsernameNotSetAsync();
+                await UsernameNotSetErrorResponseAsync();
                 return;
             }
 
@@ -53,10 +53,7 @@ namespace Bot.Discord.Commands.LastFMCommands
 
             if (this._tracks == null || !this._tracks.Any())
             {
-                this._embed.WithTitle("Error while attempting get latest tracks");
-                this._embed.WithDescription($"No scrobbles were found on your profile ({this._user.LastFMUserName})");
-                this._embed.WithColor(Constants.WarningColorOrange);
-                await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
+                await NoScrobblesErrorResponseFoundAsync();
                 return;
             }
 
@@ -95,11 +92,19 @@ namespace Bot.Discord.Commands.LastFMCommands
             this._logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "FM");
         }
 
-        private async Task UsernameNotSetAsync()
+        private async Task UsernameNotSetErrorResponseAsync()
         {
             this._embed.WithTitle("Error while attempting get latest tracks");
             this._embed.WithDescription("Last.FM username has not been set. \n" +
                                         "To setup your Last.FM account with this bot, please use the `.fmset username` command.");
+            this._embed.WithColor(Constants.WarningColorOrange);
+            await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
+        }
+
+        private async Task NoScrobblesErrorResponseFoundAsync()
+        {
+            this._embed.WithTitle("Error while attempting to get latest tracks");
+            this._embed.WithDescription($"No scrobbles were found on your profile ({this._user.LastFMUserName})");
             this._embed.WithColor(Constants.WarningColorOrange);
             await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
         }

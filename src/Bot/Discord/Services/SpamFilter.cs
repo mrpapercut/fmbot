@@ -54,7 +54,7 @@ namespace Bot.Discord.Services
                         catch (HttpException)
                         {
                             await context.User.SendMessageAsync("I can't send messages in that channel!\n" +
-                                                                "Please change my permission so i can send messages in that channel!").ConfigureAwait(false);
+                                                                "Please change my permissions or ask an admin to change them so i can send messages in that channel!").ConfigureAwait(false);
                         }
                     }
                     await unitOfWork.SaveAsync().ConfigureAwait(false);

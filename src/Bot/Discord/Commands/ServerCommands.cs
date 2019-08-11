@@ -73,25 +73,22 @@ namespace Bot.Discord.Commands
         [RequireBotPermission(GuildPermission.SendMessages)]
         public async Task RemovePrefixAsync()
         {
-            using (var unitOfWork = Unity.Resolve<IServerUnitOfWork>())
-            {
-                var server = await unitOfWork.Servers
-                    .GetOrAddServerAsync(Context.Guild.Id, Context.Guild.Name, Context.Guild.MemberCount)
-                    .ConfigureAwait(false);
+            using var unitOfWork = Unity.Resolve<IServerUnitOfWork>();
+            var server = await unitOfWork.Servers
+                .GetOrAddServerAsync(Context.Guild.Id, Context.Guild.Name, Context.Guild.MemberCount)
+                .ConfigureAwait(false);
 
-                var customPrefixService = Unity.Resolve<IPrefixService>();
-                customPrefixService.RemovePrefix(Context.Guild.Id);
-                server.Prefix = null;
+            var customPrefixService = Unity.Resolve<IPrefixService>();
+            customPrefixService.RemovePrefix(Context.Guild.Id);
+            server.Prefix = null;
 
-                this._embed.WithDescription("Successfully removed custom prefix.");
-                this._embed.WithColor(new Color(255, 255, 255));
+            this._embed.WithDescription("Successfully removed custom prefix.");
+            this._embed.WithColor(new Color(255, 255, 255));
 
-                await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
-                await unitOfWork.SaveAsync().ConfigureAwait(false);
+            await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
+            await unitOfWork.SaveAsync().ConfigureAwait(false);
 
-                this._logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "remove prefix");
-
-            }
+            this._logger.LogCommandUsed(Context.Guild?.Id, Context.Client.ShardId, Context.Channel.Id, Context.User.Id, "remove prefix");
         }
     }
 }

@@ -32,21 +32,39 @@ namespace Bot.LastFM.Services
         public async Task<Image<Rgba32>> GenerateChartAsync(IReadOnlyList<Album> albums, LastFMTimespan timespan, int rows = 3, int columns = 3, bool showTitles = true)
         {
             var images = new List<Image<Rgba32>>();
-            foreach (var album in albums)
+
+            Parallel.ForEach(albums, async (album) =>
             {
-                if (album.Images != null || album.Images.Medium != null)
+                if (album.Images != null || album.Images?.Medium != null)
                 {
                     images.Add(await FetchImageAsync(album.Images.Medium));
                 }
-            }
+            });
+
+            int width;
+            int height;
+
+            double root = Math.Sqrt(rows * columns);
 
             using (var outputImage = new Image<Rgba32>(150 * columns, 150 * rows))
             {
-                foreach (var image in images)
+                int offset = 0;
+                int heightOffset = 0;
+
+                for (var i = 1; i < images.Count + 1; i++)
                 {
+                    var image = images[i - 1];
+                    var position = new Point(offset, heightOffset);
                     outputImage.Mutate(o => o
-                            .DrawImage(image, new Point(0, 0), 1f)
+                        .DrawImage(image, position, 1f)
                     );
+
+                    // next row
+                    if ((i % root) == 0 && (i - 1) != 0)
+                    {
+                        offset = 0;
+                        heightOffset += 150;
+                    }
                 }
 
                 outputImage.Save("output.png");
