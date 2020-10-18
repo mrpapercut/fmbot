@@ -111,7 +111,7 @@ namespace FMBot.LastFM.Services
 
             await using var db = new FMBotDbContext(this._connectionString);
             artists = await db.ArtistAliases
-                .Include(i => i.Artist)
+                .Include(i => i.CachedArtist)
                 .ToListAsync();
 
             this._cache.Set("artists", artists, TimeSpan.FromHours(2));
@@ -174,7 +174,7 @@ namespace FMBot.LastFM.Services
                 var alias = cachedArtistAliases
                     .FirstOrDefault(f => f.Alias.ToLower() == artist.Key.ToLower());
 
-                var artistName = alias != null ? alias.Artist.Name : artist.Key;
+                var artistName = alias != null ? alias.CachedArtist.Name : artist.Key;
 
 
                 await using var db = new FMBotDbContext(this._connectionString);
@@ -221,7 +221,7 @@ namespace FMBot.LastFM.Services
                 var alias = cachedArtistAliases
                     .FirstOrDefault(f => f.Alias.ToLower() == album.Key.ArtistName.ToLower());
 
-                var artistName = alias != null ? alias.Artist.Name : album.Key.ArtistName;
+                var artistName = alias != null ? alias.CachedArtist.Name : album.Key.ArtistName;
 
                 await using var db = new FMBotDbContext(this._connectionString);
                 if (await db.UserAlbums.AnyAsync(a => a.UserId == user.UserId &&
@@ -270,7 +270,7 @@ namespace FMBot.LastFM.Services
                 var alias = cachedArtistAliases
                     .FirstOrDefault(f => f.Alias.ToLower() == track.Key.ArtistName.ToLower());
 
-                var artistName = alias != null ? alias.Artist.Name : track.Key.ArtistName;
+                var artistName = alias != null ? alias.CachedArtist.Name : track.Key.ArtistName;
 
                 await using var db = new FMBotDbContext(this._connectionString);
                 if (await db.UserTracks.AnyAsync(a => a.UserId == user.UserId &&

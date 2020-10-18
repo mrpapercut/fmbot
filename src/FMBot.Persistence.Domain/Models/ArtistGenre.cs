@@ -8,6 +8,6 @@ namespace FMBot.Persistence.Domain.Models
 
         public string Name { get; set; }
 
-        public Artist Artist { get; set; }
+        public CachedArtist CachedArtist { get; set; }
     }
 }

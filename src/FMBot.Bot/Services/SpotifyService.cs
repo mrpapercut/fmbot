@@ -12,7 +12,6 @@ using SpotifyAPI.Web;
 using SpotifyAPI.Web.Auth;
 using SpotifyAPI.Web.Enums;
 using SpotifyAPI.Web.Models;
-using Artist = FMBot.Persistence.Domain.Models.Artist;
 
 namespace FMBot.Bot.Services
 {
@@ -42,7 +41,7 @@ namespace FMBot.Bot.Services
                 {
                     var spotifyArtist = await GetArtistFromSpotify(lastFmArtist.Artist.Name);
 
-                    var artistToAdd = new Artist
+                    var artistToAdd = new CachedArtist
                     {
                         Name = lastFmArtist.Artist.Name,
                         LastFmUrl = lastFmArtist.Artist.Url,
@@ -115,13 +114,13 @@ namespace FMBot.Bot.Services
             }
         }
 
-        private static void AddAliasToExistingArtist(string artistNameBeforeCorrect, Artist dbArtist, FMBotDbContext db)
+        private static void AddAliasToExistingArtist(string artistNameBeforeCorrect, CachedArtist dbCachedArtist, FMBotDbContext db)
         {
-            if (!dbArtist.ArtistAliases.Any() || !dbArtist.ArtistAliases.Select(s => s.Alias.ToLower()).Contains(artistNameBeforeCorrect.ToLower()))
+            if (!dbCachedArtist.ArtistAliases.Any() || !dbCachedArtist.ArtistAliases.Select(s => s.Alias.ToLower()).Contains(artistNameBeforeCorrect.ToLower()))
             {
                 db.ArtistAliases.Add(new ArtistAlias
                 {
-                    ArtistId = dbArtist.Id,
+                    ArtistId = dbCachedArtist.Id,
                     Alias = artistNameBeforeCorrect,
                     CorrectsInScrobbles = true
                 });
@@ -149,7 +148,7 @@ namespace FMBot.Bot.Services
             return null;
         }
 
-        public async Task<Track> GetOrStoreTrackAsync(ResponseTrack track)
+        public async Task<CachedTrack> GetOrStoreTrackAsync(ResponseTrack track)
         {
             await using var db = new FMBotDbContext(ConfigData.Data.Database.ConnectionString);
             var dbTrack = await db.Tracks
@@ -158,7 +157,7 @@ namespace FMBot.Bot.Services
 
             if (dbTrack == null)
             {
-                var trackToAdd = new FMBot.Persistence.Domain.Models.Track
+                var trackToAdd = new FMBot.Persistence.Domain.Models.CachedTrack
                 {
                     Name = track.Name,
                     AlbumName = track.Album?.Title,
@@ -171,7 +170,7 @@ namespace FMBot.Bot.Services
 
                 if (artist != null)
                 {
-                    trackToAdd.Artist = artist;
+                    trackToAdd.CachedArtist = artist;
                 }
 
                 var spotifyTrack = await GetTrackFromSpotify(track.Name, track.Artist.Name.ToLower());
@@ -199,7 +198,7 @@ namespace FMBot.Bot.Services
             }
             else
             {
-                if (dbTrack.Artist == null)
+                if (dbTrack.CachedArtist == null)
                 {
                     var artist = await db.Artists
                         .AsQueryable()
@@ -207,7 +206,7 @@ namespace FMBot.Bot.Services
 
                     if (artist != null)
                     {
-                        dbTrack.Artist = artist;
+                        dbTrack.CachedArtist = artist;
                         db.Entry(dbTrack).State = EntityState.Modified;
                     }
                 }

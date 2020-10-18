@@ -35,9 +35,9 @@ namespace FMBot.Persistence.EntityFrameWork
         public virtual DbSet<UserTrack> UserTracks { get; set; }
         public virtual DbSet<UserPlay> UserPlays { get; set; }
 
-        public virtual DbSet<Artist> Artists { get; set; }
-        public virtual DbSet<Album> Albums { get; set; }
-        public virtual DbSet<Track> Tracks { get; set; }
+        public virtual DbSet<CachedArtist> Artists { get; set; }
+        public virtual DbSet<CachedAlbum> Albums { get; set; }
+        public virtual DbSet<CachedTrack> Tracks { get; set; }
 
         public virtual DbSet<CensoredMusic> CensoredMusic { get; set; }
 
@@ -178,7 +178,7 @@ namespace FMBot.Persistence.EntityFrameWork
                     .OnDelete(DeleteBehavior.Cascade);
             });
 
-            modelBuilder.Entity<Artist>(entity =>
+            modelBuilder.Entity<CachedArtist>(entity =>
             {
                 entity.HasKey(e => e.Id);
 
@@ -188,20 +188,20 @@ namespace FMBot.Persistence.EntityFrameWork
                         v => v.Split(',', StringSplitOptions.RemoveEmptyEntries));
             });
 
-            modelBuilder.Entity<Album>(entity =>
+            modelBuilder.Entity<CachedAlbum>(entity =>
             {
                 entity.HasKey(a => a.Id);
 
-                entity.HasOne(d => d.Artist)
+                entity.HasOne(d => d.CachedArtist)
                     .WithMany(p => p.Albums)
                     .HasForeignKey(d => d.ArtistId);
             });
 
-            modelBuilder.Entity<Track>(entity =>
+            modelBuilder.Entity<CachedTrack>(entity =>
             {
                 entity.HasKey(a => a.Id);
 
-                entity.HasOne(d => d.Artist)
+                entity.HasOne(d => d.CachedArtist)
                     .WithMany(p => p.Tracks)
                     .HasForeignKey(d => d.ArtistId);
             });
@@ -215,7 +215,7 @@ namespace FMBot.Persistence.EntityFrameWork
             {
                 entity.HasKey(a => a.Id);
 
-                entity.HasOne(d => d.Artist)
+                entity.HasOne(d => d.CachedArtist)
                     .WithMany(p => p.ArtistAliases)
                     .HasForeignKey(d => d.ArtistId)
                     .OnDelete(DeleteBehavior.Cascade);
@@ -225,7 +225,7 @@ namespace FMBot.Persistence.EntityFrameWork
             {
                 entity.HasKey(a => a.Id);
 
-                entity.HasOne(d => d.Artist)
+                entity.HasOne(d => d.CachedArtist)
                     .WithMany(p => p.ArtistGenres)
                     .HasForeignKey(d => d.ArtistId)
                     .OnDelete(DeleteBehavior.Cascade);

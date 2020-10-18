@@ -10,6 +10,6 @@ namespace FMBot.Persistence.Domain.Models
 
         public bool CorrectsInScrobbles { get; set; }
 
-        public Artist Artist { get; set; }
+        public CachedArtist CachedArtist { get; set; }
     }
 }

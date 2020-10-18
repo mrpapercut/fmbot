@@ -2,7 +2,7 @@ using System;
 
 namespace FMBot.Persistence.Domain.Models
 {
-    public class Track
+    public class CachedTrack
     {
         public int Id { get; set; }
 
@@ -26,6 +26,6 @@ namespace FMBot.Persistence.Domain.Models
 
         public DateTime? SpotifyLastUpdated { get; set; }
 
-        public Artist Artist { get; set; }
+        public CachedArtist CachedArtist { get; set; }
     }
 }
