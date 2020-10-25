@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Discord;
 using Discord.Commands;
 using FMBot.Bot.Resources;
@@ -33,7 +34,7 @@ namespace FMBot.Bot.Services
             embed.WithColor(DiscordConstants.WarningColorOrange);
         }
 
-        public static void NoScrobblesFoundErrorResponse(this EmbedBuilder embed, LastResponseStatus apiResponse, string prfx)
+        public static void NoScrobblesFoundErrorResponse(this EmbedBuilder embed, LastResponseStatus apiResponse, string prfx, string userName)
         {
             embed.WithTitle("Error while attempting get Last.FM information");
             switch (apiResponse)
@@ -49,7 +50,9 @@ namespace FMBot.Bot.Services
                     break;
                 default:
                     embed.WithDescription(
-                        "You or the user you're searching for has no scrobbles/artists on their profile, or Last.FM is having issues. Please try again later.");
+                        $"The user `{userName}` has no scrobbles/artists/albums/tracks on [their Last.FM profile]({Constants.LastFMUserUrl}{userName}).\n" +
+                        $"Just signed up for last.fm and added your account in the bot? Make sure you [track your music](https://www.last.fm/about/trackmymusic) and your Last.FM profile is showing the music that you're listening to.\n\n" +
+                        $"Note: this error can also appear when Last.fm is having issues, in that case please try again later. Please note that .fmbot is not affiliated with Last.FM.");
                     break;
             }
 
@@ -57,7 +60,7 @@ namespace FMBot.Bot.Services
             embed.WithColor(DiscordConstants.WarningColorOrange);
         }
 
-        public static void ErrorResponse(this EmbedBuilder embed, ResponseStatus apiResponse, string message, ICommandContext context, Logger.Logger logger)
+        public static void ErrorResponse(this EmbedBuilder embed, ResponseStatus? apiResponse, string message, ICommandContext context, Logger.Logger logger)
         {
             embed.WithTitle("Error while attempting get Last.FM information");
             switch (apiResponse)
@@ -67,8 +70,11 @@ namespace FMBot.Bot.Services
                                           "Please note that .fmbot isn't affiliated with Last.FM.");
                     break;
                 default:
-                    embed.WithDescription(
-                        message);
+                    embed.WithDescription(message);
+                    if (apiResponse != null)
+                    {
+                        embed.WithFooter($"Last.fm error code: {apiResponse}");
+                    }
                     break;
             }
 

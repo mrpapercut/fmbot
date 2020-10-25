@@ -46,7 +46,7 @@ namespace FMBot.Bot.Commands
         public async Task SpotifyAsync(params string[] searchValues)
         {
             var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var prfx = this._prefixService.GetPrefix(this.Context.Guild.Id) ?? ConfigData.Data.Bot.Prefix;
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? ConfigData.Data.Bot.Prefix;
 
             try
             {
@@ -63,7 +63,7 @@ namespace FMBot.Bot.Commands
 
                     if (tracks?.Any() != true)
                     {
-                        this._embed.NoScrobblesFoundErrorResponse(tracks.Status, prfx);
+                        this._embed.NoScrobblesFoundErrorResponse(tracks.Status, prfx, userSettings.UserNameLastFM);
                         this.Context.LogCommandUsed(CommandResponse.NoScrobbles);
                         await ReplyAsync("", false, this._embed.Build());
                         return;

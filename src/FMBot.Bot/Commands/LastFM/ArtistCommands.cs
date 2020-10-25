@@ -81,7 +81,7 @@ namespace FMBot.Bot.Commands.LastFM
         public async Task ArtistAsync(params string[] artistValues)
         {
             var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var prfx = this._prefixService.GetPrefix(this.Context.Guild.Id) ?? ConfigData.Data.Bot.Prefix;
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? ConfigData.Data.Bot.Prefix;
 
             var artist = await GetArtistOrHelp(artistValues, userSettings, "artist", prfx);
             if (artist == null)
@@ -117,7 +117,7 @@ namespace FMBot.Bot.Commands.LastFM
 
             if (!artistCall.Success)
             {
-                this._embed.ErrorResponse(artistCall.Error.Value, artistCall.Message, this.Context, this._logger);
+                this._embed.ErrorResponse(artistCall.Error, artistCall.Message, this.Context, this._logger);
                 await ReplyAsync("", false, this._embed.Build());
                 this.Context.LogCommandWithLastFmError(artistCall.Error);
                 return;
@@ -212,7 +212,7 @@ namespace FMBot.Bot.Commands.LastFM
         public async Task ArtistPlaysAsync(params string[] artistValues)
         {
             var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var prfx = this._prefixService.GetPrefix(this.Context.Guild.Id) ?? ConfigData.Data.Bot.Prefix;
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? ConfigData.Data.Bot.Prefix;
 
             var artist = await GetArtistOrHelp(artistValues, userSettings, "artistplays", prfx);
             if (artist == null)
@@ -232,7 +232,7 @@ namespace FMBot.Bot.Commands.LastFM
             var artistCall = await this._lastfmApi.CallApiAsync<ArtistResponse>(queryParams, Call.ArtistInfo);
             if (!artistCall.Success)
             {
-                this._embed.ErrorResponse(artistCall.Error.Value, artistCall.Message, this.Context, this._logger);
+                this._embed.ErrorResponse(artistCall.Error, artistCall.Message, this.Context, this._logger);
                 await ReplyAsync("", false, this._embed.Build());
                 this.Context.LogCommandWithLastFmError(artistCall.Error);
                 return;
@@ -267,7 +267,7 @@ namespace FMBot.Bot.Commands.LastFM
         public async Task TopArtistsAsync(params string[] extraOptions)
         {
             var user = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var prfx = this._prefixService.GetPrefix(this.Context.Guild.Id) ?? ConfigData.Data.Bot.Prefix;
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? ConfigData.Data.Bot.Prefix;
 
             if (extraOptions.Any() && extraOptions.First() == "help")
             {
@@ -300,7 +300,7 @@ namespace FMBot.Bot.Commands.LastFM
 
                     if (artists?.Any() != true)
                     {
-                        this._embed.NoScrobblesFoundErrorResponse(artists.Status, prfx);
+                        this._embed.NoScrobblesFoundErrorResponse(artists.Status, prfx, userSettings.UserNameLastFm);
                         this.Context.LogCommandUsed(CommandResponse.NoScrobbles);
                         await ReplyAsync("", false, this._embed.Build());
                         return;
@@ -396,7 +396,7 @@ namespace FMBot.Bot.Commands.LastFM
         public async Task TasteAsync(string user = null, params string[] extraOptions)
         {
             var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var prfx = this._prefixService.GetPrefix(this.Context.Guild.Id) ?? ConfigData.Data.Bot.Prefix;
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? ConfigData.Data.Bot.Prefix;
 
             if (user == "help")
             {
@@ -511,7 +511,7 @@ namespace FMBot.Bot.Commands.LastFM
             }
 
             var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var prfx = this._prefixService.GetPrefix(this.Context.Guild.Id) ?? ConfigData.Data.Bot.Prefix;
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? ConfigData.Data.Bot.Prefix;
 
             var lastIndex = await this._guildService.GetGuildIndexTimestampAsync(this.Context.Guild);
 
@@ -554,7 +554,7 @@ namespace FMBot.Bot.Commands.LastFM
 
                 if (!artistCall.Success)
                 {
-                    this._embed.ErrorResponse(artistCall.Error.Value, artistCall.Message, this.Context, this._logger);
+                    this._embed.ErrorResponse(artistCall.Error, artistCall.Message, this.Context, this._logger);
                     await ReplyAsync("", false, this._embed.Build());
                     this.Context.LogCommandWithLastFmError(artistCall.Error);
                     return;
@@ -563,7 +563,14 @@ namespace FMBot.Bot.Commands.LastFM
                 var spotifyArtistResultsTask = this._spotifyService.GetOrStoreArtistImageAsync(artistCall.Content, artistQuery);
 
                 var guild = await guildTask;
+
                 var users = guild.GuildUsers.Select(s => s.User).ToList();
+
+                if (!users.Select(s => s.UserId).Contains(userSettings.UserId))
+                {
+                    await this._indexService.AddUserToGuild(this.Context.Guild, userSettings);
+                    users.Add(userSettings);
+                }
 
                 var artist = artistCall.Content;
 
@@ -651,7 +658,7 @@ namespace FMBot.Bot.Commands.LastFM
                 return;
             }
 
-            var prfx = this._prefixService.GetPrefix(this.Context.Guild.Id) ?? ConfigData.Data.Bot.Prefix;
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? ConfigData.Data.Bot.Prefix;
             var guild = await this._guildService.GetGuildAsync(this.Context.Guild.Id);
 
             if (extraOptions.Any() && extraOptions.First() == "help")
@@ -794,7 +801,7 @@ namespace FMBot.Bot.Commands.LastFM
 
                 if (track == null)
                 {
-                    this._embed.NoScrobblesFoundErrorResponse(track.Status, prfx);
+                    this._embed.NoScrobblesFoundErrorResponse(track.Status, prfx, userSettings.UserNameLastFM);
                     this.Context.LogCommandUsed(CommandResponse.NoScrobbles);
                     await ReplyAsync("", false, this._embed.Build());
                     return null;
