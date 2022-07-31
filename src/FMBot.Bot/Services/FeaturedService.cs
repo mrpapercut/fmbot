@@ -248,7 +248,7 @@ namespace FMBot.Bot.Services
         {
             var album = await this._lastFmRepository.GetAlbumInfoAsync(artistName, albumName);
 
-            if (!album.Success || album.Content == null || album.Content.TotalListeners < 2500)
+            if (!album.Success || album.Content == null || album.Content.TotalListeners < 250)
             {
                 Log.Information("Featured: Album call failed or album not popular enough");
                 return false;
@@ -340,7 +340,7 @@ namespace FMBot.Bot.Services
         {
             await using var db = await this._contextFactory.CreateDbContextAsync();
 
-            var filterDate = DateTime.UtcNow.AddDays(-14);
+            var filterDate = DateTime.UtcNow.AddDays(-Constants.DaysAlbumLastUsedForFeatured);
             var recentlyFeaturedAlbums = await db.FeaturedLogs
                 .AsQueryable()
                 .Where(w => w.DateTime > filterDate)

@@ -41,6 +41,7 @@ namespace FMBot.Domain
 
         public const int MaxFriends = 12;
         public const int MaxFriendsSupporter = 16;
+        public const int DaysAlbumLastUsedForFeatured = 7;
 
         public static readonly int[] PlayCountBreakPoints = {
             50,
