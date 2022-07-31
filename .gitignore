@@ -30,3 +30,7 @@ Logs/
 packages/
 src/.vs/
 .vs/
+database/data/
+
+# Keep .gitkeep
+!.gitkeep
