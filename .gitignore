@@ -34,3 +34,4 @@ database/data/
 
 # Keep .gitkeep
 !.gitkeep
+!database/data/pgdata/postgresql.conf
