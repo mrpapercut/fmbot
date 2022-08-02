@@ -162,42 +162,45 @@ namespace FMBot.Bot.Services
                         var albumFound = false;
                         var i = 0;
 
-                        while (!albumFound)
+                        if (albumList.Count() > 0)
                         {
-                            var currentAlbum = albumList[i];
-
-                            if (currentAlbum.AlbumCoverUrl != null &&
-                                currentAlbum.AlbumName != null &&
-                                await this._censorService.AlbumResult(currentAlbum.AlbumName, currentAlbum.ArtistName) == CensorService.CensorResult.Safe &&
-                                await AlbumNotFeaturedRecently(currentAlbum.AlbumName, currentAlbum.ArtistName) &&
-                                await AlbumPopularEnough(currentAlbum.AlbumName, currentAlbum.ArtistName))
+                            while (!albumFound)
                             {
-                                if (supporterDay)
+                                var currentAlbum = albumList[i];
+
+                                if (currentAlbum.AlbumCoverUrl != null &&
+                                    currentAlbum.AlbumName != null &&
+                                    await this._censorService.AlbumResult(currentAlbum.AlbumName, currentAlbum.ArtistName) == CensorService.CensorResult.Safe &&
+                                    await AlbumNotFeaturedRecently(currentAlbum.AlbumName, currentAlbum.ArtistName) &&
+                                    await AlbumPopularEnough(currentAlbum.AlbumName, currentAlbum.ArtistName))
                                 {
-                                    featuredLog.Description = $"[{currentAlbum.AlbumName}]({currentAlbum.AlbumUrl}) \n" +
-                                                              $"by {currentAlbum.ArtistName} \n\n" +
-                                                              $"{randomAvatarModeDesc}\n" +
-                                                              $"⭐ Supporter Sunday - Thanks {user.UserNameLastFM} for supporting .fmbot!";
+                                    if (supporterDay)
+                                    {
+                                        featuredLog.Description = $"[{currentAlbum.AlbumName}]({currentAlbum.AlbumUrl}) \n" +
+                                                                $"by {currentAlbum.ArtistName} \n\n" +
+                                                                $"{randomAvatarModeDesc}\n" +
+                                                                $"⭐ Supporter Sunday - Thanks {user.UserNameLastFM} for supporting .fmbot!";
+                                    }
+                                    else
+                                    {
+                                        featuredLog.Description = $"[{currentAlbum.AlbumName}]({currentAlbum.AlbumUrl}) \n" +
+                                                                $"by {currentAlbum.ArtistName} \n\n" +
+                                                                $"{randomAvatarModeDesc} from {user.UserNameLastFM}";
+                                    }
+
+                                    featuredLog.UserId = user.UserId;
+
+                                    featuredLog.AlbumName = currentAlbum.AlbumName;
+                                    featuredLog.ImageUrl = currentAlbum.AlbumCoverUrl;
+                                    featuredLog.ArtistName = currentAlbum.ArtistName;
+
+                                    albumFound = true;
                                 }
                                 else
                                 {
-                                    featuredLog.Description = $"[{currentAlbum.AlbumName}]({currentAlbum.AlbumUrl}) \n" +
-                                                              $"by {currentAlbum.ArtistName} \n\n" +
-                                                              $"{randomAvatarModeDesc} from {user.UserNameLastFM}";
+                                    i++;
+                                    await Task.Delay(400);
                                 }
-
-                                featuredLog.UserId = user.UserId;
-
-                                featuredLog.AlbumName = currentAlbum.AlbumName;
-                                featuredLog.ImageUrl = currentAlbum.AlbumCoverUrl;
-                                featuredLog.ArtistName = currentAlbum.ArtistName;
-
-                                albumFound = true;
-                            }
-                            else
-                            {
-                                i++;
-                                await Task.Delay(400);
                             }
                         }
 
