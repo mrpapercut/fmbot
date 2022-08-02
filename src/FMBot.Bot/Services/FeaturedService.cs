@@ -280,7 +280,7 @@ namespace FMBot.Bot.Services
                 lastFmUsersToFilter.AddRange(recentlyFeaturedUsers);
             }
 
-            var filterDate = DateTime.UtcNow.AddDays(-lastUsedFilter);
+            var filterDate = DateTime.UtcNow.AddHours(-lastUsedFilter);
             var users = db.Users
                 .AsQueryable()
                 .Where(w => w.Blocked != true &&
