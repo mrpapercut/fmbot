@@ -429,11 +429,11 @@ public class FeaturedService
         var filterDate = DateTime.UtcNow.AddHours(-lastUsedFilter);
         var users = db.Users
             .AsQueryable()
-            .Where(w => w.Blocked != true &&
-                        !lastFmUsersToFilter.Contains(w.UserNameLastFM.ToLower()) &&
-                        (!supportersOnly || w.UserType == UserType.Supporter) &&
-                        w.LastUsed != null &&
-                        w.LastUsed > filterDate).ToList();
+            .Where(w => w.Blocked != true).ToList(); // &&
+                        // !lastFmUsersToFilter.Contains(w.UserNameLastFM.ToLower()) &&
+                        // (!supportersOnly || w.UserType == UserType.Supporter) &&
+                        // w.LastUsed != null &&
+                        // w.LastUsed > filterDate).ToList();
 
         // Great coding for staff that also has supporter
         if (supportersOnly)
