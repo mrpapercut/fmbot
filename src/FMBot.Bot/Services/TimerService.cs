@@ -266,7 +266,7 @@ public class TimerService
 
     public async Task UpdateDiscordSupporters()
     {
-        await this._supporterService.UpdateDiscordSupporters();
+        // await this._supporterService.UpdateDiscordSupporters();
     }
 
     public static async Task ChangeToNewAvatar(DiscordShardedClient client, string imageUrl)
