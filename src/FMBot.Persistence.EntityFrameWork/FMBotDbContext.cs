@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Configuration;
 
 namespace FMBot.Persistence.EntityFrameWork
@@ -17,8 +21,14 @@ namespace FMBot.Persistence.EntityFrameWork
         public virtual DbSet<User> Users { get; set; }
         public virtual DbSet<Supporter> Supporters { get; set; }
 
+        public virtual DbSet<DiscogsRelease> DiscogsReleases { get; set; }
+        public virtual DbSet<UserDiscogsReleases> UserDiscogsReleases { get; set; }
+        public virtual DbSet<UserDiscogs> UserDiscogs { get; set; }
+
         public virtual DbSet<BottedUser> BottedUsers { get; set; }
         public virtual DbSet<InactiveUsers> InactiveUsers { get; set; }
+        public virtual DbSet<BottedUserReport> BottedUserReport { get; set; }
+        public virtual DbSet<CensoredMusicReport> CensoredMusicReport { get; set; }
 
         public virtual DbSet<UserArtist> UserArtists { get; set; }
         public virtual DbSet<UserAlbum> UserAlbums { get; set; }
@@ -26,6 +36,7 @@ namespace FMBot.Persistence.EntityFrameWork
         public virtual DbSet<UserPlay> UserPlays { get; set; }
         public virtual DbSet<UserCrown> UserCrowns { get; set; }
         public virtual DbSet<UserStreak> UserStreaks { get; set; }
+        public virtual DbSet<AiGeneration> AiGenerations { get; set; }
 
         public virtual DbSet<Artist> Artists { get; set; }
         public virtual DbSet<Album> Albums { get; set; }
@@ -148,6 +159,11 @@ namespace FMBot.Persistence.EntityFrameWork
                 entity.HasIndex(i => i.UserId);
 
                 entity.HasIndex(i => i.DiscordUserId);
+
+                entity.Property(e => e.EmoteReactions)
+                    .HasConversion(
+                        v => string.Join(',', v),
+                        v => v.Split(',', StringSplitOptions.RemoveEmptyEntries));
             });
 
             modelBuilder.Entity<Supporter>(entity =>
@@ -158,6 +174,11 @@ namespace FMBot.Persistence.EntityFrameWork
             modelBuilder.Entity<BottedUser>(entity =>
             {
                 entity.HasKey(e => e.BottedUserId);
+            });
+
+            modelBuilder.Entity<BottedUserReport>(entity =>
+            {
+                entity.HasKey(e => e.Id);
             });
 
             modelBuilder.Entity<InactiveUsers>(entity =>
@@ -302,6 +323,18 @@ namespace FMBot.Persistence.EntityFrameWork
                     .OnDelete(DeleteBehavior.Cascade);
             });
 
+            modelBuilder.Entity<AiGeneration>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+
+                entity.HasIndex(i => i.UserId);
+
+                entity.HasOne(u => u.User)
+                    .WithMany(a => a.AiGenerations)
+                    .HasForeignKey(f => f.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
             modelBuilder.Entity<FeaturedLog>(entity =>
             {
                 entity.HasKey(e => e.FeaturedLogId);
@@ -372,6 +405,11 @@ namespace FMBot.Persistence.EntityFrameWork
                 entity.HasKey(a => a.CensoredMusicId);
             });
 
+            modelBuilder.Entity<CensoredMusicReport>(entity =>
+            {
+                entity.HasKey(a => a.Id);
+            });
+
             modelBuilder.Entity<ArtistAlias>(entity =>
             {
                 entity.HasKey(a => a.Id);
@@ -392,6 +430,94 @@ namespace FMBot.Persistence.EntityFrameWork
                 entity.HasOne(d => d.Artist)
                     .WithMany(p => p.ArtistGenres)
                     .HasForeignKey(d => d.ArtistId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<UserDiscogs>(entity =>
+            {
+                entity.HasKey(a => a.UserId);
+
+                entity.HasOne(u => u.User)
+                    .WithOne(a => a.UserDiscogs)
+                    .HasForeignKey<UserDiscogs>(f => f.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<UserDiscogsReleases>(entity =>
+            {
+                entity.HasKey(a => a.UserDiscogsReleaseId);
+
+                entity.HasIndex(i => i.UserId);
+
+                entity.HasOne(u => u.User)
+                    .WithMany(a => a.DiscogsReleases)
+                    .HasForeignKey(f => f.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(d => d.Release)
+                    .WithMany(p => p.UserDiscogsReleases)
+                    .HasForeignKey(d => d.ReleaseId);
+            });
+
+            modelBuilder.Entity<DiscogsRelease>(entity =>
+            {
+                entity.HasKey(a => a.DiscogsId);
+
+                entity.Property(p => p.DiscogsId)
+                    .ValueGeneratedNever();
+
+                entity.Property(e => e.Format)
+                    .HasColumnType("citext");
+
+                entity.Property(e => e.Label)
+                    .HasColumnType("citext");
+
+                entity.Property(e => e.Title)
+                    .HasColumnType("citext");
+
+                entity.Property(e => e.Artist)
+                    .HasColumnType("citext");
+
+                entity.Property(e => e.FeaturingArtist)
+                    .HasColumnType("citext");
+            });
+
+            modelBuilder.Entity<DiscogsFormatDescriptions>(entity =>
+            {
+                entity.HasKey(a => a.Id);
+
+                entity.Property(e => e.Description)
+                    .HasColumnType("citext");
+
+                entity.HasOne(d => d.DiscogsRelease)
+                    .WithMany(p => p.FormatDescriptions)
+                    .HasForeignKey(d => d.ReleaseId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<DiscogsStyle>(entity =>
+            {
+                entity.HasKey(a => a.Id);
+
+                entity.Property(e => e.Description)
+                    .HasColumnType("citext");
+
+                entity.HasOne(d => d.DiscogsRelease)
+                    .WithMany(p => p.Styles)
+                    .HasForeignKey(d => d.ReleaseId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<DiscogsGenre>(entity =>
+            {
+                entity.HasKey(a => a.Id);
+
+                entity.Property(e => e.Description)
+                    .HasColumnType("citext");
+
+                entity.HasOne(d => d.DiscogsRelease)
+                    .WithMany(p => p.Genres)
+                    .HasForeignKey(d => d.ReleaseId)
                     .OnDelete(DeleteBehavior.Cascade);
             });
 

@@ -1,15 +1,17 @@
-namespace FMBot.Domain.Models
+namespace FMBot.Domain.Models;
+
+public class UpdateUserQueueItem
 {
-    public class UpdateUserQueueItem
+    public UpdateUserQueueItem(int userId, bool updateQueue = false, bool getAccurateTotalPlaycount = true)
     {
-        public UpdateUserQueueItem(int userId, bool updateQueue = false)
-        {
-            this.UserId = userId;
-            this.UpdateQueue = updateQueue;
-        }
-
-        public int UserId { get; }
-
-        public bool UpdateQueue { get; }
+        this.UserId = userId;
+        this.UpdateQueue = updateQueue;
+        this.GetAccurateTotalPlaycount = getAccurateTotalPlaycount;
     }
+
+    public int UserId { get; }
+
+    public bool UpdateQueue { get; }
+
+    public bool GetAccurateTotalPlaycount { get; }
 }

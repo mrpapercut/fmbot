@@ -1,6 +1,8 @@
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using AngleSharp.Css;
+using Discord;
 using Discord.WebSocket;
 using FMBot.Bot.Models;
 using FMBot.Bot.Services;
@@ -9,6 +11,7 @@ using FMBot.Domain;
 using FMBot.Domain.Models;
 using FMBot.LastFM.Repositories;
 using SkiaSharp;
+using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
 
 namespace FMBot.Bot.Builders;
 
@@ -139,14 +142,18 @@ public class ChartBuilders
 
         var supporter = await this._supporterService.GetRandomSupporter(context.DiscordGuild, context.ContextUser.UserType);
         embedDescription += ChartService.AddSettingsToDescription(chartSettings, embedDescription, supporter, context.Prefix);
+        if (supporter != null)
+        {
+            response.Components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: SupporterService.GetSupporterLink());
+        }
 
         var nsfwAllowed = context.DiscordGuild == null || ((SocketTextChannel)context.DiscordChannel).IsNsfw;
         var chart = await this._chartService.GenerateChartAsync(chartSettings);
 
-        if (chartSettings.CensoredAlbums is > 0)
+        if (chartSettings.CensoredItems is > 0)
         {
             embedDescription +=
-                $"{chartSettings.CensoredAlbums.Value} album(s) filtered due to images that are not allowed to be posted on Discord.\n";
+                $"{chartSettings.CensoredItems.Value} {StringExtensions.GetAlbumsString(chartSettings.CensoredItems.Value)} filtered due to images that are not allowed to be posted on Discord.\n";
         }
 
         if (chartSettings.ContainsNsfw && !nsfwAllowed)
@@ -274,9 +281,25 @@ public class ChartBuilders
 
         var supporter = await this._supporterService.GetRandomSupporter(context.DiscordGuild, context.ContextUser.UserType);
         embedDescription += ChartService.AddSettingsToDescription(chartSettings, embedDescription, supporter, context.Prefix);
+        if (supporter != null)
+        {
+            response.Components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: SupporterService.GetSupporterLink());
+        }
 
+        var nsfwAllowed = context.DiscordGuild == null || ((SocketTextChannel)context.DiscordChannel).IsNsfw;
         var chart = await this._chartService.GenerateChartAsync(chartSettings);
 
+        if (chartSettings.CensoredItems is > 0)
+        {
+            embedDescription +=
+                $"{chartSettings.CensoredItems.Value} {StringExtensions.GetArtistsString(chartSettings.CensoredItems.Value)} filtered due to images that are not allowed to be posted on Discord.\n";
+        }
+
+        if (chartSettings.ContainsNsfw && !nsfwAllowed)
+        {
+            embedDescription +=
+                $"⚠️ Contains NSFW covers - Click to reveal\n";
+        }
         response.Embed.WithDescription(embedDescription);
 
         var encoded = chart.Encode(SKEncodedImageFormat.Png, 100);
@@ -284,6 +307,7 @@ public class ChartBuilders
 
         response.FileName =
             $"artist-chart-{chartSettings.Width}w-{chartSettings.Height}h-{chartSettings.TimeSettings.TimePeriod}-{userSettings.UserNameLastFm}.png";
+        response.Spoiler = chartSettings.ContainsNsfw;
 
         return response;
     }

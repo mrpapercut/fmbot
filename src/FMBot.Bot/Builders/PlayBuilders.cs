@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -15,11 +17,15 @@ using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
 using FMBot.Domain.Models;
 using FMBot.LastFM.Domain.Types;
+using FMBot.LastFM.Extensions;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
+using Genius.Models.User;
 using Microsoft.Extensions.Options;
 using Swan;
+using Swan.Cryptography;
 using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
+using User = FMBot.Persistence.Domain.Models.User;
 
 namespace FMBot.Bot.Builders;
 
@@ -37,6 +43,7 @@ public class PlayBuilder
     private readonly TimeService _timeService;
     private readonly TrackService _trackService;
     private readonly UserService _userService;
+    private readonly CountryService _countryService;
     private readonly WhoKnowsPlayService _whoKnowsPlayService;
     private readonly WhoKnowsArtistService _whoKnowsArtistService;
     private readonly WhoKnowsAlbumService _whoKnowsAlbumService;
@@ -61,7 +68,8 @@ public class PlayBuilder
         IOptions<BotSettings> botSettings,
         TimeService timeService,
         GenreService genreService,
-        TrackService trackService)
+        TrackService trackService,
+        CountryService countryService)
     {
         this._guildService = guildService;
         this._indexService = indexService;
@@ -80,6 +88,7 @@ public class PlayBuilder
         this._timeService = timeService;
         this._genreService = genreService;
         this._trackService = trackService;
+        this._countryService = countryService;
     }
 
     public async Task<ResponseModel> NowPlayingAsync(
@@ -130,6 +139,7 @@ public class PlayBuilder
         var embedType = context.ContextUser.FmEmbedType;
 
         Guild guild = null;
+        IDictionary<int, FullGuildUser> guildUsers = null;
         if (context.DiscordGuild != null)
         {
             guild = await this._guildService.GetGuildAsync(context.DiscordGuild.Id);
@@ -142,6 +152,8 @@ public class PlayBuilder
             {
                 await this._indexService.UpdateGuildUser(await context.DiscordGuild.GetUserAsync(context.ContextUser.DiscordUserId),
                     context.ContextUser.UserId, guild);
+
+                guildUsers = await this._guildService.GetGuildUsers(context.DiscordGuild.Id);
             }
         }
 
@@ -154,18 +166,14 @@ public class PlayBuilder
             totalPlaycount = recentTracks.Content.TotalAmount;
         }
 
-        if (!userSettings.DifferentUser)
-        {
-            this._whoKnowsPlayService.AddRecentPlayToCache(context.ContextUser.UserId, currentTrack);
-        }
-
         var requesterUserTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
         var embedTitle = !userSettings.DifferentUser
             ? $"{requesterUserTitle}"
-            : $"{userSettings.DiscordUserName}{userSettings.UserType.UserTypeToIcon()}, requested by {requesterUserTitle}";
+            : $"{userSettings.DisplayName}{userSettings.UserType.UserTypeToIcon()}, requested by {requesterUserTitle}";
 
         var fmText = "";
-        var footerText = "";
+        var footerText = await this._userService.GetFooterAsync(context.ContextUser.FmFooterOptions, userSettings,
+            currentTrack.ArtistName, currentTrack.AlbumName, currentTrack.TrackName, currentTrack.Loved, totalPlaycount, guild);
 
         if (!userSettings.DifferentUser &&
             !currentTrack.NowPlaying &&
@@ -173,81 +181,8 @@ public class PlayBuilder
             currentTrack.TimePlayed < DateTime.UtcNow.AddHours(-1) &&
             currentTrack.TimePlayed > DateTime.UtcNow.AddDays(-5))
         {
-            footerText +=
-                $"Using Spotify and fm lagging behind? Check '{context.Prefix}outofsync'\n";
+            footerText.Append($"Using Spotify and lagging behind? Check '{context.Prefix}outofsync' - ");
         }
-
-        if (currentTrack.Loved)
-        {
-            footerText +=
-                $"❤️ Loved track | ";
-        }
-
-        if (embedType is FmEmbedType.TextMini or FmEmbedType.TextFull or FmEmbedType.EmbedTiny)
-        {
-            if (!userSettings.DifferentUser)
-            {
-                footerText +=
-                    $"{requesterUserTitle} has ";
-            }
-            else
-            {
-                footerText +=
-                    $"{userSettings.UserNameLastFm} (requested by {requesterUserTitle}) has ";
-            }
-        }
-        else
-        {
-            footerText +=
-                $"{userSettings.UserNameLastFm} has ";
-        }
-
-
-        if (!userSettings.DifferentUser)
-        {
-            switch (context.ContextUser.FmCountType)
-            {
-                case FmCountType.Track:
-                    var trackPlaycount =
-                        await this._whoKnowsTrackService.GetTrackPlayCountForUser(currentTrack.ArtistName,
-                            currentTrack.TrackName, context.ContextUser.UserId);
-                    if (trackPlaycount.HasValue)
-                    {
-                        footerText += $"{trackPlaycount} scrobbles on this track | ";
-                    }
-
-                    break;
-                case FmCountType.Album:
-                    if (!string.IsNullOrEmpty(currentTrack.AlbumName))
-                    {
-                        var albumPlaycount =
-                            await this._whoKnowsAlbumService.GetAlbumPlayCountForUser(currentTrack.ArtistName,
-                                currentTrack.AlbumName, context.ContextUser.UserId);
-                        if (albumPlaycount.HasValue)
-                        {
-                            footerText += $"{albumPlaycount} scrobbles on this album | ";
-                        }
-                    }
-
-                    break;
-                case FmCountType.Artist:
-                    var artistPlaycount =
-                        await this._whoKnowsArtistService.GetArtistPlayCountForUser(currentTrack.ArtistName,
-                            context.ContextUser.UserId);
-                    if (artistPlaycount.HasValue)
-                    {
-                        footerText += $"{artistPlaycount} scrobbles on this artist | ";
-                    }
-
-                    break;
-                case null:
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
-        }
-
-        footerText += $"{totalPlaycount} total scrobbles";
 
         switch (embedType)
         {
@@ -270,7 +205,7 @@ public class PlayBuilder
                 }
 
                 fmText +=
-                    $"`{footerText.FilterOutMentions()}`";
+                    $"`{footerText}`";
 
                 response.ResponseType = ResponseType.Text;
                 response.Text = fmText;
@@ -305,7 +240,7 @@ public class PlayBuilder
 
                 if (!currentTrack.NowPlaying && currentTrack.TimePlayed.HasValue)
                 {
-                    footerText += " | Last scrobble:";
+                    footerText.AppendLine("Last scrobble:");
                     response.Embed.WithTimestamp(currentTrack.TimePlayed.Value);
                 }
 
@@ -315,18 +250,17 @@ public class PlayBuilder
                 if (guild != null && !userSettings.DifferentUser)
                 {
                     var guildAlsoPlaying = this._whoKnowsPlayService.GuildAlsoPlayingTrack(context.ContextUser.UserId,
-                        guild, currentTrack.ArtistName, currentTrack.TrackName);
+                        guildUsers, guild, currentTrack.ArtistName, currentTrack.TrackName);
 
                     if (guildAlsoPlaying != null)
                     {
-                        footerText += "\n";
-                        footerText += guildAlsoPlaying;
+                        footerText.AppendLine(guildAlsoPlaying);
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(footerText))
+                if (footerText.Length > 0)
                 {
-                    response.EmbedFooter.WithText(footerText);
+                    response.EmbedFooter.WithText(footerText.ToString());
                     response.Embed.WithFooter(response.EmbedFooter);
                 }
 
@@ -355,8 +289,7 @@ public class PlayBuilder
 
     public async Task<ResponseModel> RecentAsync(
         ContextModel context,
-        UserSettingsModel userSettings,
-        int amount)
+        UserSettingsModel userSettings)
     {
         var response = new ResponseModel
         {
@@ -369,86 +302,104 @@ public class PlayBuilder
             sessionKey = context.ContextUser.SessionKeyLastFm;
         }
 
-        var recentTracks = await this._lastFmRepository.GetRecentTracksAsync(userSettings.UserNameLastFm, amount, useCache: true, sessionKey: sessionKey);
+        Response<RecentTrackList> recentTracks;
+        if (!userSettings.DifferentUser)
+        {
+            if (context.ContextUser.LastIndexed == null)
+            {
+                _ = this._indexService.IndexUser(context.ContextUser);
+                recentTracks = await this._lastFmRepository.GetRecentTracksAsync(userSettings.UserNameLastFm,
+                    useCache: true, sessionKey: sessionKey);
+            }
+            else
+            {
+                recentTracks = await this._updateService.UpdateUserAndGetRecentTracks(context.ContextUser);
+            }
+        }
+        else
+        {
+            recentTracks =
+                await this._lastFmRepository.GetRecentTracksAsync(userSettings.UserNameLastFm, 120, useCache: true);
+        }
 
         if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
         {
-            GenericEmbedService.RecentScrobbleCallFailedBuilder(recentTracks, userSettings.UserNameLastFm);
+            response.Embed = GenericEmbedService.RecentScrobbleCallFailedBuilder(recentTracks, userSettings.UserNameLastFm);
             response.CommandResponse = CommandResponse.LastFmError;
             return response;
         }
 
-        string footerText;
         var requesterUserTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
         var embedTitle = !userSettings.DifferentUser
             ? $"{requesterUserTitle}"
-            : $"{userSettings.DiscordUserName}{userSettings.UserType.UserTypeToIcon()}, requested by {requesterUserTitle}";
+            : $"{userSettings.DisplayName}{userSettings.UserType.UserTypeToIcon()}, requested by {requesterUserTitle}";
 
         response.EmbedAuthor.WithName($"Latest tracks for {embedTitle}");
 
-        response.EmbedAuthor.WithIconUrl(context.DiscordUser.GetAvatarUrl());
+        if (!context.SlashCommand)
+        {
+            response.EmbedAuthor.WithIconUrl(context.DiscordUser.GetAvatarUrl());
+        }
         response.EmbedAuthor.WithUrl(recentTracks.Content.UserRecentTracksUrl);
         response.Embed.WithAuthor(response.EmbedAuthor);
 
-        var fmRecentText = "";
-        var resultAmount = recentTracks.Content.RecentTracks.Count;
-        if (recentTracks.Content.RecentTracks.Any(a => a.NowPlaying))
+        var firstTrack = recentTracks.Content.RecentTracks.ElementAtOrDefault(0);
+        string thumbnailUrl = null;
+        if (firstTrack?.AlbumCoverUrl != null)
         {
-            resultAmount -= 1;
-        }
-        for (var i = 0; i < resultAmount; i++)
-        {
-            var track = recentTracks.Content.RecentTracks[i];
-
-            if (i == 0)
+            var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel,
+                firstTrack.AlbumName, firstTrack.ArtistName, firstTrack.AlbumCoverUrl);
+            if (safeForChannel == CensorService.CensorResult.Safe)
             {
-                if (track.AlbumCoverUrl != null)
-                {
-                    var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel,
-                        track.AlbumName, track.ArtistName, track.AlbumCoverUrl);
-                    if (safeForChannel == CensorService.CensorResult.Safe)
-                    {
-                        response.Embed.WithThumbnailUrl(track.AlbumCoverUrl);
-                    }
-                }
-            }
-
-            var trackString = StringService.TrackToLinkedString(track, context.ContextUser.RymEnabled);
-
-            if (track.NowPlaying)
-            {
-                fmRecentText += $"🎶 - {trackString}\n";
-            }
-            else
-            {
-                fmRecentText += $"`{i + 1}` - {trackString}\n";
+                thumbnailUrl = firstTrack.AlbumCoverUrl;
             }
         }
 
-        response.Embed.WithDescription(fmRecentText);
+        var pages = new List<PageBuilder>();
 
-        var firstTrack = recentTracks.Content.RecentTracks[0];
-        if (firstTrack.NowPlaying)
-        {
-            footerText =
-                $"{userSettings.UserNameLastFm} has {recentTracks.Content.TotalAmount} scrobbles | Now Playing";
-        }
-        else
-        {
-            footerText =
-                $"{userSettings.UserNameLastFm} has {recentTracks.Content.TotalAmount} scrobbles";
+        var trackPages = recentTracks.Content.RecentTracks
+            .Take(120)
+            .ToList()
+            .ChunkBy(6);
+        var pageCounter = 1;
 
-            if (!firstTrack.NowPlaying && firstTrack.TimePlayed.HasValue)
+        foreach (var trackPage in trackPages)
+        {
+            var trackPageString = new StringBuilder();
+            foreach (var track in trackPage)
             {
-                footerText += " | Last scrobble:";
-                response.Embed.WithTimestamp(firstTrack.TimePlayed.Value);
+                trackPageString.AppendLine(StringService
+                    .TrackToLinkedStringWithTimestamp(track, context.ContextUser.RymEnabled));
             }
+
+            var footer = new StringBuilder();
+            footer.Append($"Page {pageCounter}/{trackPages.Count}");
+            footer.Append($" - {userSettings.UserNameLastFm} has {recentTracks.Content.TotalAmount} scrobbles");
+
+            var page = new PageBuilder()
+                .WithDescription(trackPageString.ToString())
+                .WithAuthor(response.EmbedAuthor)
+                .WithFooter(footer.ToString());
+
+            if (pageCounter == 1 && thumbnailUrl != null)
+            {
+                page.WithThumbnailUrl(thumbnailUrl);
+            }
+
+            pages.Add(page);
+
+            pageCounter++;
         }
 
-        response.EmbedFooter.WithText(footerText);
+        if (!pages.Any())
+        {
+            pages.Add(new PageBuilder()
+                .WithDescription("No recent tracks found.")
+                .WithAuthor(response.EmbedAuthor));
+        }
 
-        response.Embed.WithFooter(response.EmbedFooter);
-
+        response.StaticPaginator = StringService.BuildSimpleStaticPaginator(pages);
+        response.ResponseType = ResponseType.Paginator;
         return response;
     }
 
@@ -471,16 +422,42 @@ public class PlayBuilder
             return response;
         }
 
-        var streak = await this._playService.GetStreak(userSettings.UserId, recentTracks);
-        var streakText = PlayService.StreakToText(streak);
-        response.Embed.WithDescription(streakText);
+        var lastPlays = await this._playService.GetAllUserPlays(userSettings.UserId);
+        var streak = PlayService.GetCurrentStreak(userSettings.UserId, recentTracks.Content.RecentTracks.FirstOrDefault(), lastPlays);
 
-        response.EmbedAuthor.WithName($"{userSettings.DiscordUserName}{userSettings.UserType.UserTypeToIcon()}'s streak overview");
+        response.EmbedAuthor.WithName($"{userSettings.DisplayName}{userSettings.UserType.UserTypeToIcon()}'s streak overview");
+
+        if (PlayService.StreakExists(streak))
+        {
+            var streakText = PlayService.StreakToText(streak);
+            response.Embed.WithDescription(streakText);
+
+            if (!userSettings.DifferentUser)
+            {
+                if (PlayService.ShouldSaveStreak(streak))
+                {
+                    var saved = await this._playService.UpdateOrInsertStreak(streak);
+                    if (saved != null)
+                    {
+                        response.Embed.WithFooter(saved);
+                    }
+                }
+                else
+                {
+                    response.Embed.WithFooter($"Only streaks with {Constants.StreakSaveThreshold} plays or higher are saved.");
+                }
+            }
+        }
+        else
+        {
+            response.Embed.WithDescription("No active streak found.\n" +
+                                           "Try scrobbling multiple of the same artist, album or track in a row to get started.");
+        }
+
         if (!userSettings.DifferentUser)
         {
             response.EmbedAuthor.WithIconUrl(context.DiscordUser.GetAvatarUrl());
-            var saved = await this._playService.UpdateOrInsertStreak(streak);
-            response.Embed.WithFooter(saved);
+
         }
 
         response.EmbedAuthor.WithUrl($"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library");
@@ -491,7 +468,9 @@ public class PlayBuilder
 
     public async Task<ResponseModel> StreakHistoryAsync(
         ContextModel context,
-        UserSettingsModel userSettings)
+        UserSettingsModel userSettings,
+        bool viewIds = false,
+        long? streakToDelete = null)
     {
         var response = new ResponseModel
         {
@@ -515,6 +494,19 @@ public class PlayBuilder
             return response;
         }
 
+        if (streakToDelete.HasValue && !userSettings.DifferentUser)
+        {
+            var streak = streaks.FirstOrDefault(f =>
+                f.UserStreakId == streakToDelete && f.UserId == context.ContextUser.UserId);
+            await this._playService.DeleteStreak(streak.UserStreakId);
+
+            response.Embed.WithTitle("🗑 Streak deleted");
+            response.Embed.WithDescription("Successfully deleted the following streak:\n" +
+                                           PlayService.StreakToText(streak, false));
+            response.ResponseType = ResponseType.Embed;
+            return response;
+        }
+
         var streakPages = streaks.Chunk(4).ToList();
 
         var counter = 1;
@@ -532,15 +524,20 @@ public class PlayBuilder
                     pageString.Append($"<t:{((DateTimeOffset)streak.StreakStarted).ToUnixTimeSeconds()}:f>");
                     pageString.Append($" til ");
                     pageString.Append($"<t:{((DateTimeOffset)streak.StreakEnded).ToUnixTimeSeconds()}:t>");
-                    pageString.AppendLine();
                 }
                 else
                 {
                     pageString.Append($"<t:{((DateTimeOffset)streak.StreakStarted).ToUnixTimeSeconds()}:f>");
                     pageString.Append($" til ");
                     pageString.Append($"<t:{((DateTimeOffset)streak.StreakEnded).ToUnixTimeSeconds()}:f>");
-                    pageString.AppendLine();
                 }
+
+                if (viewIds && !userSettings.DifferentUser)
+                {
+                    pageString.Append($" · Deletion ID: `{streak.UserStreakId}`");
+                }
+
+                pageString.AppendLine();
 
                 var streakText = PlayService.StreakToText(streak, false);
                 pageString.AppendLine(streakText);
@@ -559,6 +556,8 @@ public class PlayBuilder
         }
 
         response.StaticPaginator = StringService.BuildStaticPaginator(pages);
+
+
         return response;
     }
 
@@ -602,7 +601,7 @@ public class PlayBuilder
             }
 
             response.Embed.AddField(
-                $"{day.Playcount} plays - {StringExtensions.GetListeningTimeString(day.ListeningTime)} - <t:{day.Date.ToUnixEpochDate()}:D>",
+                $"{day.Playcount} {StringExtensions.GetPlaysString(day.Playcount)} - {StringExtensions.GetListeningTimeString(day.ListeningTime)} - <t:{day.Date.ToUnixEpochDate()}:D>",
                 $"{genreString}\n" +
                 $"{day.TopArtist}\n" +
                 $"{day.TopAlbum}\n" +
@@ -619,7 +618,7 @@ public class PlayBuilder
 
         response.Embed.WithDescription(description);
 
-        response.EmbedAuthor.WithName($"Daily overview for {userSettings.DiscordUserName}{userSettings.UserType.UserTypeToIcon()}");
+        response.EmbedAuthor.WithName($"Daily overview for {StringExtensions.Sanitize(userSettings.DisplayName)}{userSettings.UserType.UserTypeToIcon()}");
 
         response.EmbedAuthor.WithUrl($"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library?date_preset=LAST_7_DAYS");
         response.Embed.WithAuthor(response.EmbedAuthor);
@@ -724,7 +723,7 @@ public class PlayBuilder
 
         reply.AppendLine(StringService.TrackToLinkedString(mileStonePlay.Content));
 
-        var userTitle = $"{userSettings.DiscordUserName.FilterOutMentions()}{userSettings.UserType.UserTypeToIcon()}";
+        var userTitle = $"{userSettings.DisplayName}{userSettings.UserType.UserTypeToIcon()}";
 
         response.Embed.WithTitle($"{mileStoneAmount}{StringExtensions.GetAmountEnd(mileStoneAmount)} scrobble from {userTitle}");
 
@@ -748,6 +747,308 @@ public class PlayBuilder
 
         response.Embed.WithDescription(reply.ToString());
 
+        return response;
+    }
+
+    public async Task<ResponseModel> YearAsync(
+        ContextModel context,
+        UserSettingsModel userSettings,
+        int year)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Paginator
+        };
+
+        var pagesAmount = userSettings.UserType == UserType.User ? 2 : 3;
+
+        var yearOverview = await this._playService.GetYear(userSettings.UserId, year);
+
+        if (yearOverview.LastfmErrors)
+        {
+            response.Embed.WithDescription("Sorry, Last.fm returned an error. Please try again");
+            response.CommandResponse = CommandResponse.LastFmError;
+            response.ResponseType = ResponseType.Embed;
+            return response;
+        }
+        if (yearOverview.TopArtists?.TopArtists == null || !yearOverview.TopArtists.TopArtists.Any())
+        {
+            response.Embed.WithDescription("Sorry, you haven't listened to music in this year. If you think this message is wrong, please try again.");
+            response.CommandResponse = CommandResponse.NoScrobbles;
+            response.ResponseType = ResponseType.Embed;
+            return response;
+        }
+
+        var userTitle = $"{userSettings.DisplayName}{userSettings.UserType.UserTypeToIcon()}'s";
+        var pages = new List<PageBuilder>();
+
+        var description = new StringBuilder();
+        var fields = new List<EmbedFieldBuilder>();
+
+        if (yearOverview.PreviousTopArtists?.TopArtists is { Count: > 0 })
+        {
+            description.AppendLine($"Your top genres, artists, albums and tracks for {year} compared to {year - 1}.");
+        }
+        else
+        {
+            description.AppendLine($"Welcome to Last.fm and .fmbot. Here's your overview for {year}.");
+        }
+
+        response.Embed.WithDescription(description.ToString());
+
+        var genres = await this._genreService.GetTopGenresForTopArtists(yearOverview.TopArtists.TopArtists);
+
+        var previousTopGenres = new List<TopGenre>();
+        if (yearOverview.PreviousTopArtists?.TopArtists != null)
+        {
+            previousTopGenres = await this._genreService.GetTopGenresForTopArtists(yearOverview.PreviousTopArtists?.TopArtists);
+        }
+
+        var genreDescription = new StringBuilder();
+        var lines = new List<StringService.BillboardLine>();
+        for (var i = 0; i < genres.Count; i++)
+        {
+            var topGenre = genres[i];
+
+            var previousTopGenre = previousTopGenres.FirstOrDefault(f => f.GenreName == topGenre.GenreName);
+
+            int? previousPosition = previousTopGenre == null ? null : previousTopGenres.IndexOf(previousTopGenre);
+
+            var line = StringService.GetBillboardLine($"**{topGenre.GenreName}**", i, previousPosition);
+            lines.Add(line);
+
+            if (i < 10)
+            {
+                genreDescription.AppendLine(line.Text);
+            }
+        }
+
+        fields.Add(new EmbedFieldBuilder().WithName("Genres").WithValue(genreDescription.ToString()).WithIsInline(true));
+
+        var artistDescription = new StringBuilder();
+        for (var i = 0; i < yearOverview.TopArtists.TopArtists.Count; i++)
+        {
+            var topArtist = yearOverview.TopArtists.TopArtists[i];
+
+            var previousTopArtist =
+                yearOverview.PreviousTopArtists?.TopArtists?.FirstOrDefault(f =>
+                    f.ArtistName == topArtist.ArtistName);
+
+            var previousPosition = previousTopArtist == null ? null : yearOverview.PreviousTopArtists?.TopArtists?.IndexOf(previousTopArtist);
+
+            var line = StringService.GetBillboardLine($"**{topArtist.ArtistName}**", i, previousPosition);
+            lines.Add(line);
+
+            if (i < 10)
+            {
+                artistDescription.AppendLine(line.Text);
+            }
+        }
+
+        fields.Add(new EmbedFieldBuilder().WithName("Artists").WithValue(artistDescription.ToString()).WithIsInline(true));
+
+        var rises = lines
+            .Where(w => w.OldPosition is >= 20 && w.NewPosition <= 15 && w.PositionsMoved >= 15)
+            .OrderBy(o => o.PositionsMoved)
+            .ThenBy(o => o.NewPosition)
+            .ToList();
+
+        var risesDescription = new StringBuilder();
+        if (rises.Any())
+        {
+            foreach (var rise in rises.Take(7))
+            {
+                risesDescription.Append($"<:5_or_more_up:912380324841918504>");
+                risesDescription.AppendLine($"{rise.Name} (From #{rise.OldPosition} to #{rise.NewPosition})");
+            }
+        }
+
+        if (risesDescription.Length > 0)
+        {
+            fields.Add(new EmbedFieldBuilder().WithName("Rises").WithValue(risesDescription.ToString()));
+        }
+
+        var drops = lines
+            .Where(w => w.OldPosition is <= 15 && w.NewPosition >= 20 && w.PositionsMoved <= -15)
+            .OrderBy(o => o.PositionsMoved)
+            .ThenBy(o => o.OldPosition)
+            .ToList();
+
+        var dropsDescription = new StringBuilder();
+        if (drops.Any())
+        {
+            foreach (var drop in drops.Take(7))
+            {
+                dropsDescription.Append($"<:5_or_more_down:912380324753838140> ");
+                dropsDescription.AppendLine($"{drop.Name} (From #{drop.OldPosition} to #{drop.NewPosition})");
+            }
+        }
+
+        if (dropsDescription.Length > 0)
+        {
+            fields.Add(new EmbedFieldBuilder().WithName("Drops").WithValue(dropsDescription.ToString()));
+        }
+
+        pages.Add(new PageBuilder()
+            .WithFields(fields)
+            .WithDescription(description.ToString())
+            .WithTitle($"{userTitle} {year} in Review - 1/{pagesAmount}"));
+
+        fields = new List<EmbedFieldBuilder>();
+
+        var albumDescription = new StringBuilder();
+        if (yearOverview.TopAlbums.TopAlbums.Any())
+        {
+            for (var i = 0; i < yearOverview.TopAlbums.TopAlbums.Take(8).Count(); i++)
+            {
+                var topAlbum = yearOverview.TopAlbums.TopAlbums[i];
+
+                var previousTopAlbum =
+                    yearOverview.PreviousTopAlbums?.TopAlbums?.FirstOrDefault(f =>
+                        f.ArtistName == topAlbum.ArtistName && f.AlbumName == topAlbum.AlbumName);
+
+                var previousPosition = previousTopAlbum == null ? null : yearOverview.PreviousTopAlbums?.TopAlbums?.IndexOf(previousTopAlbum);
+
+                albumDescription.AppendLine(StringService.GetBillboardLine($"**{topAlbum.ArtistName}** - **{topAlbum.AlbumName}**", i, previousPosition).Text);
+            }
+            fields.Add(new EmbedFieldBuilder().WithName("Albums").WithValue(albumDescription.ToString()));
+        }
+
+        var trackDescription = new StringBuilder();
+        for (var i = 0; i < yearOverview.TopTracks.TopTracks.Take(8).Count(); i++)
+        {
+            var topTrack = yearOverview.TopTracks.TopTracks[i];
+
+            var previousTopTrack =
+                yearOverview.PreviousTopTracks?.TopTracks?.FirstOrDefault(f =>
+                    f.ArtistName == topTrack.ArtistName && f.TrackName == topTrack.TrackName);
+
+            var previousPosition = previousTopTrack == null ? null : yearOverview.PreviousTopTracks?.TopTracks?.IndexOf(previousTopTrack);
+
+            trackDescription.AppendLine(StringService.GetBillboardLine($"**{topTrack.ArtistName}** - **{topTrack.TrackName}**", i, previousPosition).Text);
+        }
+
+        fields.Add(new EmbedFieldBuilder().WithName("Tracks").WithValue(trackDescription.ToString()));
+
+        var countries = await this._countryService.GetTopCountriesForTopArtists(yearOverview.TopArtists.TopArtists);
+
+        var previousTopCountries = new List<TopCountry>();
+        if (yearOverview.PreviousTopArtists?.TopArtists != null)
+        {
+            previousTopCountries = await this._countryService.GetTopCountriesForTopArtists(yearOverview.PreviousTopArtists?.TopArtists);
+        }
+
+        var countryDescription = new StringBuilder();
+        for (var i = 0; i < countries.Count; i++)
+        {
+            var topCountry = countries[i];
+
+            var previousTopCountry = previousTopCountries.FirstOrDefault(f => f.CountryCode == topCountry.CountryCode);
+
+            int? previousPosition = previousTopCountry == null ? null : previousTopCountries.IndexOf(previousTopCountry);
+
+            var line = StringService.GetBillboardLine($"**{topCountry.CountryName}**", i, previousPosition);
+            lines.Add(line);
+
+            if (i < 8)
+            {
+                countryDescription.AppendLine(line.Text);
+            }
+        }
+
+        fields.Add(new EmbedFieldBuilder().WithName("Countries").WithValue(countryDescription.ToString()).WithIsInline(true));
+
+        var tracksAudioOverview = await this._trackService.GetAverageTrackAudioFeaturesForTopTracks(yearOverview.TopTracks.TopTracks);
+        var previousTracksAudioOverview = await this._trackService.GetAverageTrackAudioFeaturesForTopTracks(yearOverview.PreviousTopTracks?.TopTracks);
+
+        if (tracksAudioOverview.Total > 0)
+        {
+            fields.Add(new EmbedFieldBuilder().WithName("Top track analysis")
+                .WithValue(TrackService.AudioFeatureAnalysisComparisonString(tracksAudioOverview, previousTracksAudioOverview)));
+        }
+
+        var supporterDescription = context.ContextUser.UserType == UserType.User
+            ? $"Want an extra page with your artist discoveries and a monthly overview? \n[Get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})"
+            : "";
+
+        pages.Add(new PageBuilder()
+            .WithDescription(supporterDescription)
+            .WithFields(fields)
+            .WithTitle($"{userTitle} {year} in Review - 2/{pagesAmount}"));
+
+        if (userSettings.UserType != UserType.User)
+        {
+            fields = new List<EmbedFieldBuilder>();
+
+            var allPlays = await this._playService.GetAllUserPlays(userSettings.UserId);
+
+            var filter = new DateTime(year, 01, 01);
+            var endFilter = new DateTime(year, 12, 12, 23, 59, 59);
+            var knownArtists = allPlays
+                .Where(w => w.TimePlayed < filter)
+                .GroupBy(g => g.ArtistName)
+                .Select(s => s.Key)
+                .ToList();
+
+            var topNewArtists = allPlays
+                .Where(w => w.TimePlayed >= filter && w.TimePlayed <= endFilter)
+                .GroupBy(g => g.ArtistName)
+                .Select(s => new TopArtist
+                {
+                    ArtistName = s.Key,
+                    UserPlaycount = s.Count(),
+                    FirstPlay = s.OrderBy(o => o.TimePlayed).First().TimePlayed
+                })
+                .Where(w => !knownArtists.Any(a => a.Equals(w.ArtistName)))
+                .OrderByDescending(o => o.UserPlaycount)
+                .Take(10)
+                .ToList();
+
+            var newArtistDescription = new StringBuilder();
+            for (var i = 0; i < topNewArtists.Count(); i++)
+            {
+                var newArtist = topNewArtists.OrderBy(o => o.FirstPlay).ToList()[i];
+
+                newArtistDescription.AppendLine($"**[{newArtist.ArtistName}]({LastfmUrlExtensions.GetArtistUrl(newArtist.ArtistName)})** " +
+                                                $"- **{newArtist.UserPlaycount}** {StringExtensions.GetPlaysString(newArtist.UserPlaycount)} " +
+                                                $"- On **<t:{newArtist.FirstPlay.Value.ToUnixEpochDate()}:D>**");
+            }
+
+            fields.Add(new EmbedFieldBuilder().WithName("Artist discoveries")
+                .WithValue(newArtistDescription.ToString()));
+
+            var monthDescription = new StringBuilder();
+            var monthGroups = allPlays
+                .Where(w => w.TimePlayed >= filter && w.TimePlayed <= endFilter)
+                .OrderBy(o => o.TimePlayed)
+                .GroupBy(g => new { g.TimePlayed.Month, g.TimePlayed.Year });
+
+            foreach (var month in monthGroups)
+            {
+                if (!allPlays.Any(a => a.TimePlayed < DateTime.UtcNow.AddMonths(-month.Key.Month)))
+                {
+                    break;
+                }
+
+                var time = await this._timeService.GetPlayTimeForPlays(month);
+                monthDescription.AppendLine(
+                    $"**`{CultureInfo.CurrentCulture.DateTimeFormat.GetMonthName(month.Key.Month)}`** " +
+                    $"- **{month.Count()}** plays " +
+                    $"- **{StringExtensions.GetLongListeningTimeString(time)}**");
+            }
+            if (monthDescription.Length > 0)
+            {
+                fields.Add(new EmbedFieldBuilder().WithName("Months")
+                    .WithValue(monthDescription.ToString()));
+            }
+
+            pages.Add(new PageBuilder()
+                .WithFields(fields)
+                .WithTitle($"{userTitle} {year} in Review - 3/{pagesAmount}")
+                .WithDescription("⭐ .fmbot Supporter stats"));
+        }
+
+        response.StaticPaginator = StringService.BuildSimpleStaticPaginator(pages);
         return response;
     }
 }

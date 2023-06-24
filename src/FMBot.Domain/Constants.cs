@@ -1,80 +1,100 @@
-namespace FMBot.Domain
+namespace FMBot.Domain;
+
+public static class Constants
 {
-    public static class Constants
-    {
 
-        public const string LastFMUserUrl = "https://www.last.fm/user/";
+    public const string DiscogsUserUrl = "https://www.discogs.com/user/";
 
-        public const string LastFmNonExistentImageName = "2a96cbd8b46e442fc41c2b86b821562f.png";
+    public const string DiscogsReleaseUrl = "https://www.discogs.com/release/";
 
-        public const int InviteLinkPermissions = 322624;
+    public const string LastFMUserUrl = "https://www.last.fm/user/";
 
-        public const ulong BotProductionId = 356268235697553409;
+    public const string LastFmNonExistentImageName = "2a96cbd8b46e442fc41c2b86b821562f.png";
 
-        public const ulong BotBetaId = 493845886166630443;
+    public const int InviteLinkPermissions = 322624;
 
-        public const string DocsUrl = "https://fmbot.xyz";
+    public const ulong BotProductionId = 356268235697553409;
 
-        public const string CompactTimePeriodList = "weekly/monthly/quarterly/half/yearly/alltime";
+    public const ulong BotBetaId = 493845886166630443;
 
-        public static readonly string ExpandedTimePeriodList = "'weekly', 'monthly', 'quarterly', 'half', 'yearly', or 'alltime'";
+    public const string DocsUrl = "https://fmbot.xyz";
 
-        public const string UserMentionExample = "`@usermention` / `lfm:fm-bot` / `356268235697553409`";
+    public const string CompactTimePeriodList = "weekly/monthly/quarterly/half/yearly/alltime";
 
-        public const string BillboardExample = "`billboard` / `bb`";
-        public const string ExtraLargeExample = "`extralarge` / `xl`";
+    public static readonly string ExpandedTimePeriodList = "'weekly', 'monthly', 'quarterly', 'half', 'yearly', or 'alltime'";
 
-        public const string UserMentionOrLfmUserNameExample = "`fm-bot` / `@usermention` / `356268235697553409`";
+    public const string UserMentionExample = "`@usermention` / `lfm:fm-bot` / `356268235697553409`";
 
-        /// <summary>Amount of days to store plays for users for</summary>
-        public const int DaysToStorePlays = 46;
+    public const string BillboardExample = "`billboard` / `bb`";
+    public const string ExtraLargeExample = "`extralarge` / `xl`";
 
-        public const int SupporterMessageChance = 15;
+    public const string UserMentionOrLfmUserNameExample = "`fm-bot` / `@usermention` / `356268235697553409`";
 
-        public const int DefaultPlaysForCrown = 30;
+    public const string AutoCompleteLoginRequired = "Connect your Last.fm account with /login first to see results..";
+    public const string ServerStaffOnly = "You are not authorized to use this command. Only users with the 'Ban Members' permission or server admins can use this command.";
+    public const string FmbotStaffOnly = "Unauthorized, only .fmbot staff can use this command.";
 
-        public const int DefaultPageSize = 10;
-        public const int DefaultExtraLargePageSize = 16;
+    public const string GetSupporterButton = "Get .fmbot supporter";
 
-        public const int FeaturedMinute = 0;
-        public const int DaysLastUsedForFeatured = 1;
+    public const string GetSupporterOverviewButton = "View all supporter perks here.";
+    public const string GetSupporterOverviewLink = "https://fmbot.xyz/supporter/";
+    public const string GetSupporterDiscordLink = "https://discord.com/application-directory/356268235697553409/premium";
 
-        public const int MaxFriends = 12;
-        public const int MaxFriendsSupporter = 16;
-        public const int DaysAlbumLastUsedForFeatured = 7;
+    /// <summary>Amount of days to store plays for users for</summary>
+    public const int DaysToStorePlays = 46;
 
-        public static readonly int[] PlayCountBreakPoints = {
-            50,
-            100,
-            250,
-            420,
-            500,
-            1000,
-            1337,
-            2500,
-            5000,
-            10000,
-            25000,
-            50000,
-            100000,
-            150000,
-            200000,
-            250000,
-            300000,
-            350000,
-            400000,
-            450000,
-            500000,
-            600000,
-            700000,
-            800000,
-            900000,
-            1000000,
-            2000000,
-            3000000,
-            4000000,
-            5000000
-        };
-    }
+    public const int SupporterMessageChance = 12;
+    public const int SupporterPromoChance = 10;
+
+    public const int DefaultPlaysForCrown = 30;
+
+    public const int DefaultPageSize = 10;
+    public const int DefaultExtraLargePageSize = 16;
+
+    public const int FeaturedMinute = 0;
+    public const int DaysLastUsedForFeatured = 1;
+
+    public const int MaxFriends = 12;
+    public const int MaxFriendsSupporter = 18;
+
+    public const int MaxFooterOptions = 4;
+    public const int MaxFooterOptionsSupporter = 8;
+
+    public const int StreakSaveThreshold = 25;
+
+    public const string GetPremiumServer = "This feature is not quite ready yet. Stay tuned!";
+    public const int DaysAlbumLastUsedForFeatured = 7;
+
+    public static readonly int[] PlayCountBreakPoints = {
+        50,
+        100,
+        250,
+        420,
+        500,
+        1000,
+        1337,
+        2500,
+        5000,
+        10000,
+        25000,
+        50000,
+        100000,
+        150000,
+        200000,
+        250000,
+        300000,
+        350000,
+        400000,
+        450000,
+        500000,
+        600000,
+        700000,
+        800000,
+        900000,
+        1000000,
+        2000000,
+        3000000,
+        4000000,
+        5000000
+    };
 }
-

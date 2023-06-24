@@ -2,14 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text.Encodings.Web;
 using System.Threading.Tasks;
 using Dapper;
 using Discord;
 using FMBot.Bot.Models;
+using FMBot.Bot.Resources;
 using FMBot.Bot.Services.WhoKnows;
+using FMBot.Domain;
 using FMBot.Domain.Models;
 using FMBot.LastFM.Domain.Enums;
 using FMBot.LastFM.Domain.Types;
+using FMBot.LastFM.Extensions;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
@@ -31,8 +35,18 @@ public class AlbumService
     private readonly TimerService _timer;
     private readonly WhoKnowsAlbumService _whoKnowsAlbumService;
     private readonly IDbContextFactory<FMBotDbContext> _contextFactory;
+    private readonly UpdateRepository _updateRepository;
+    private readonly ArtistsService _artistsService;
 
-    public AlbumService(IMemoryCache cache, IOptions<BotSettings> botSettings, AlbumRepository albumRepository, LastFmRepository lastFmRepository, TimerService timer, WhoKnowsAlbumService whoKnowsAlbumService, IDbContextFactory<FMBotDbContext> contextFactory)
+    public AlbumService(IMemoryCache cache,
+        IOptions<BotSettings> botSettings,
+        AlbumRepository albumRepository,
+        LastFmRepository lastFmRepository,
+        TimerService timer,
+        WhoKnowsAlbumService whoKnowsAlbumService,
+        IDbContextFactory<FMBotDbContext> contextFactory,
+        UpdateRepository updateRepository,
+        ArtistsService artistsService)
     {
         this._cache = cache;
         this._albumRepository = albumRepository;
@@ -40,6 +54,8 @@ public class AlbumService
         this._timer = timer;
         this._whoKnowsAlbumService = whoKnowsAlbumService;
         this._contextFactory = contextFactory;
+        this._updateRepository = updateRepository;
+        this._artistsService = artistsService;
         this._botSettings = botSettings.Value;
     }
 
@@ -53,7 +69,7 @@ public class AlbumService
 
             if (searchValue.ToLower() == "featured")
             {
-                searchValue = $"{this._timer._currentFeatured.ArtistName} | {this._timer._currentFeatured.AlbumName}";
+                searchValue = $"{this._timer.CurrentFeatured.ArtistName} | {this._timer.CurrentFeatured.AlbumName}";
             }
 
             int? rndPosition = null;
@@ -96,7 +112,7 @@ public class AlbumService
 
                 if (!albumInfo.Success && albumInfo.Error == ResponseStatus.MissingParameters)
                 {
-                    response.Embed.WithDescription($"Album `{searchAlbumName}` by `{searchArtistName}`could not be found, please check your search values and try again.");
+                    response.Embed.WithDescription($"Album `{searchAlbumName}` by `{searchArtistName}` could not be found, please check your search values and try again.");
                     response.CommandResponse = CommandResponse.NotFound;
                     response.ResponseType = ResponseType.Embed;
                     return new AlbumSearch(null, response);
@@ -114,7 +130,16 @@ public class AlbumService
         }
         else
         {
-            var recentScrobbles = await this._lastFmRepository.GetRecentTracksAsync(lastFmUserName, 1, true, sessionKey);
+            Response<RecentTrackList> recentScrobbles;
+
+            if (userId.HasValue && otherUserUsername == null)
+            {
+                recentScrobbles = await this._updateRepository.UpdateUser(new UpdateUserQueueItem(userId.Value));
+            }
+            else
+            {
+                recentScrobbles = await this._lastFmRepository.GetRecentTracksAsync(lastFmUserName, 1, true, sessionKey);
+            }
 
             if (GenericEmbedService.RecentScrobbleCallFailed(recentScrobbles))
             {
@@ -192,6 +217,7 @@ public class AlbumService
         if (result.Success)
         {
             response.Embed.WithDescription($"Album could not be found, please check your search values and try again.");
+            response.Embed.WithFooter($"Search value: '{searchValue}'");
             response.CommandResponse = CommandResponse.LastFmError;
             response.ResponseType = ResponseType.Embed;
             return new AlbumSearch(null, response);
@@ -286,6 +312,13 @@ public class AlbumService
         return $"album-spotify-cover-{lastFmUrl.ToLower()}";
     }
 
+    public async Task<Album> GetAlbumForId(int albumId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+
+        return await db.Albums.FindAsync(albumId);
+    }
+
     public async Task<Album> GetAlbumFromDatabase(string artistName, string albumName)
     {
         if (string.IsNullOrWhiteSpace(artistName) || string.IsNullOrWhiteSpace(albumName))
@@ -293,10 +326,12 @@ public class AlbumService
             return null;
         }
 
+        var correctedArtistName = await this._artistsService.GetCorrectedArtistName(artistName);
+
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var album = await this._albumRepository.GetAlbumForName(artistName, albumName, connection);
+        var album = await this._albumRepository.GetAlbumForName(correctedArtistName, albumName, connection);
 
         await connection.CloseAsync();
 
@@ -310,6 +345,7 @@ public class AlbumService
             AlbumCoverUrl = album.SpotifyImageUrl ?? album.LastfmImageUrl,
             AlbumName = album.Name,
             ArtistName = album.ArtistName,
+            ArtistUrl = LastfmUrlExtensions.GetArtistUrl(album.ArtistName),
             Mbid = album.Mbid,
             AlbumUrl = album.LastFmUrl
         };
@@ -361,25 +397,15 @@ public class AlbumService
 
             if (user == null)
             {
-                return new List<AlbumAutoCompleteSearchModel> { new("Start typing to search through albums...") };
+                return new List<AlbumAutoCompleteSearchModel> { new(Constants.AutoCompleteLoginRequired) };
             }
 
-            const string sql = "SELECT * " +
-                               "FROM public.user_plays " +
-                               "WHERE user_id = @userId AND album_name IS NOT NULL " +
-                               "ORDER BY time_played desc " +
-                               "LIMIT 100 ";
-
-            DefaultTypeMap.MatchNamesWithUnderscores = true;
             await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
             await connection.OpenAsync();
 
-            var userPlays = (await connection.QueryAsync<UserPlay>(sql, new
-            {
-                userId = user.UserId
-            })).ToList();
+            var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, DateTime.UtcNow.AddDays(-2));
 
-            var albums = userPlays
+            var albums = plays
                 .OrderByDescending(o => o.TimePlayed)
                 .Select(s => new AlbumAutoCompleteSearchModel(s.ArtistName, s.AlbumName))
                 .Distinct()
@@ -413,25 +439,15 @@ public class AlbumService
 
             if (user == null)
             {
-                return new List<AlbumAutoCompleteSearchModel> { new("Login to the bot first") };
+                return new List<AlbumAutoCompleteSearchModel> { new(Constants.AutoCompleteLoginRequired) };
             }
 
-            const string sql = "SELECT * " +
-                               "FROM public.user_plays " +
-                               "WHERE user_id = @userId AND album_name IS NOT NULL " +
-                               "ORDER BY time_played desc " +
-                               "LIMIT 1500 ";
-
-            DefaultTypeMap.MatchNamesWithUnderscores = true;
             await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
             await connection.OpenAsync();
 
-            var userPlays = (await connection.QueryAsync<UserPlay>(sql, new
-            {
-                userId = user.UserId
-            })).ToList();
+            var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, DateTime.UtcNow.AddDays(-20));
 
-            var albums = userPlays
+            var albums = plays
                 .GroupBy(g => new AlbumAutoCompleteSearchModel(g.ArtistName, g.AlbumName))
                 .OrderByDescending(o => o.Count())
                 .Select(s => s.Key)
@@ -443,7 +459,7 @@ public class AlbumService
         }
         catch (Exception e)
         {
-            Log.Error("Error in GetRecentTopArtists", e);
+            Log.Error($"Error in {nameof(GetRecentTopAlbums)}", e);
             throw;
         }
     }
@@ -471,7 +487,7 @@ public class AlbumService
                     .Select(s => new AlbumAutoCompleteSearchModel(s.ArtistName, s.Name, s.Popularity))
                     .ToList();
 
-                this._cache.Set(cacheKey, albums, TimeSpan.FromMinutes(15));
+                this._cache.Set(cacheKey, albums, TimeSpan.FromHours(2));
             }
 
             searchValue = searchValue.ToLower();

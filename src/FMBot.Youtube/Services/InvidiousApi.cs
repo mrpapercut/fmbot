@@ -4,9 +4,11 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FMBot.Youtube.Domain.Models;
+using System.Web;
+using FMBot.Youtube.Models;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
 using Serilog;
@@ -31,7 +33,7 @@ namespace FMBot.Youtube.Services
         {
             var queryParams = new Dictionary<string, string>
             {
-                {"q", WebUtility.UrlEncode(searchQuery) },
+                {"q", searchQuery },
             };
 
             var url = this._url + "api/v1/search";
@@ -42,7 +44,7 @@ namespace FMBot.Youtube.Services
                 RequestUri = new Uri(url),
                 Method = HttpMethod.Get
             };
-
+            
             try
             {
                 using var httpResponse = await this._client.SendAsync(request);
@@ -63,9 +65,9 @@ namespace FMBot.Youtube.Services
 
                 var result = JsonSerializer.Deserialize<List<InvidiousSearchResult>>(requestBody, jsonSerializerOptions);
 
-                if (result != null && result.Any())
+                if (result != null && result.Any(a => a.Type == "video"))
                 {
-                    return result.First();
+                    return result.First(f => f.Type == "video");
                 }
 
                 return null;

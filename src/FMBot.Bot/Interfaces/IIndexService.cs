@@ -3,32 +3,39 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
+using FMBot.Bot.Models;
+using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 
-namespace FMBot.Bot.Interfaces
+namespace FMBot.Bot.Interfaces;
+
+public interface IIndexService
 {
-    public interface IIndexService
-    {
-        void AddUsersToIndexQueue(IReadOnlyList<User> users);
+    void AddUsersToIndexQueue(IReadOnlyList<User> users);
 
-        Task IndexUser(User user);
+    Task<IndexedUserStats> IndexUser(User user);
 
-        Task<GuildUser> GetOrAddUserToGuild(Guild guild, IGuildUser discordGuildUser, User user);
+    Task<GuildUser> GetOrAddUserToGuild(
+        IDictionary<int, FullGuildUser> guildUsers,
+        Guild guild,
+        IGuildUser discordGuildUser,
+        User user);
 
-        Task UpdateGuildUser(IGuildUser discordGuildUser, int userId, Guild guildId);
+    Task AddGuildUserToDatabase(GuildUser guildUserToAdd);
 
-        Task UpdateGuildUserEvent(IGuildUser discordGuildUser);
+    Task UpdateGuildUser(IGuildUser discordGuildUser, int userId, Guild guildId);
 
-        Task RemoveUserFromGuild(ulong discordUserId, ulong discordGuildId);
+    Task AddOrUpdateGuildUser(IGuildUser discordGuildUser);
 
-        Task<DateTime?> AddUserRegisteredLfmDate(int userId);
+    Task RemoveUserFromGuild(ulong discordUserId, ulong discordGuildId);
 
-        Task<(int, int?)> StoreGuildUsers(IGuild discordGuild, IReadOnlyCollection<IGuildUser> discordGuildUsers);
+    Task<DateTime?> AddUserRegisteredLfmDate(int userId);
 
-        Task<IReadOnlyList<User>> GetUsersToFullyUpdate(IReadOnlyCollection<IGuildUser> discordGuildUsers);
+    Task<int> StoreGuildUsers(IGuild discordGuild, IReadOnlyCollection<IGuildUser> discordGuildUsers);
 
-        Task<int> GetIndexedUsersCount(IReadOnlyCollection<IGuildUser> discordGuildUsers);
+    Task<IReadOnlyList<User>> GetUsersToFullyUpdate(IReadOnlyCollection<IGuildUser> discordGuildUsers);
 
-        Task<IReadOnlyList<User>> GetOutdatedUsers(DateTime timeLastIndexed);
-    }
+    Task<int> GetIndexedUsersCount(IReadOnlyCollection<IGuildUser> discordGuildUsers);
+
+    Task<IReadOnlyList<User>> GetOutdatedUsers(DateTime timeLastIndexed);
 }

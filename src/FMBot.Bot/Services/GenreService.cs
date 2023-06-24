@@ -28,7 +28,7 @@ public class GenreService
     private async Task CacheAllArtistGenres()
     {
         const string cacheKey = "artist-genres-cached";
-        var cacheTime = TimeSpan.FromMinutes(5);
+        var cacheTime = TimeSpan.FromHours(1);
 
         if (this._cache.TryGetValue(cacheKey, out _))
         {
@@ -139,7 +139,7 @@ public class GenreService
 
                 genres = (await connection.QueryAsync<string>(sql)).ToList();
 
-                this._cache.Set(cacheKey, genres, TimeSpan.FromMinutes(15));
+                this._cache.Set(cacheKey, genres, TimeSpan.FromHours(2));
             }
 
             searchValue = searchValue.ToLower();
@@ -183,6 +183,33 @@ public class GenreService
             }).ToList();
     }
 
+    public async Task<List<AffinityItemDto>> GetTopGenresWithPositionForTopArtists(IEnumerable<AffinityItemDto> topArtists)
+    {
+        if (topArtists == null)
+        {
+            return new List<AffinityItemDto>();
+        }
+
+        await CacheAllArtistGenres();
+
+        var allGenres = new List<GenreWithPlaycount>();
+        foreach (var artist in topArtists)
+        {
+            allGenres = GetGenreWithPlaycountsForArtist(allGenres, artist.Name, artist.Playcount);
+        }
+
+        return allGenres
+            .GroupBy(g => g.Name)
+            .OrderByDescending(o => o.Sum(s => s.Playcount))
+            .Where(w => w.Key != null)
+            .Select((s, i) => new AffinityItemDto
+            {
+                Name = s.Key,
+                Playcount = s.Sum(se => se.Playcount),
+                Position = i
+            }).ToList();
+    }
+
     public async Task<List<string>> GetTopGenresForTopArtistsString(IEnumerable<string> topArtists)
     {
         var topGenres = new List<string>();
@@ -196,7 +223,7 @@ public class GenreService
         foreach (var artist in topArtists)
         {
             var genres = await GetGenresForArtist(artist);
-            if (genres.Any())
+            if (genres != null && genres.Any())
             {
                 topGenres.AddRange(genres);
             }
@@ -255,7 +282,7 @@ public class GenreService
 
     public async Task<ICollection<WhoKnowsObjectWithUser>> GetUsersWithGenreForUserArtists(
         IEnumerable<UserArtist> userArtists,
-        ICollection<GuildUser> guildUsers)
+        IDictionary<int, FullGuildUser> guildUsers)
     {
         await CacheAllArtistGenres();
 
@@ -270,8 +297,7 @@ public class GenreService
             }
             else
             {
-                var guildUser = guildUsers.FirstOrDefault(f => f.UserId == user.UserId);
-                if (guildUser == null)
+                if (!guildUsers.TryGetValue(user.UserId, out var guildUser))
                 {
                     continue;
                 }
@@ -281,13 +307,12 @@ public class GenreService
                     UserId = user.UserId,
                     Playcount = user.Playcount,
                     DiscordName = guildUser.UserName,
-                    LastFMUsername = guildUser.User.UserNameLastFM,
+                    LastFMUsername = guildUser.UserNameLastFM,
                     Name = guildUser.UserName,
-                    PrivacyLevel = guildUser.User.PrivacyLevel,
-                    RegisteredLastFm = guildUser.User.RegisteredLastFm,
-                    LastUsed = guildUser.User.LastUsed,
-                    WhoKnowsWhitelisted = guildUser.WhoKnowsWhitelisted
-                });
+                    LastUsed = guildUser.LastUsed,
+                    LastMessage = guildUser.LastMessage,
+                    Roles = guildUser.Roles
+            });
             }
         }
 
@@ -349,7 +374,7 @@ public class GenreService
         return foundGenres;
     }
 
-    public async Task<List<string>> GetTopGenresForPlays(IEnumerable<UserPlay> plays)
+    public async Task<List<string>> GetTopGenresForPlays(IEnumerable<UserPlayTs> plays)
     {
         var artists = plays
             .GroupBy(x => new { x.ArtistName })
@@ -373,20 +398,8 @@ public class GenreService
             .ToList();
     }
 
-    public static string GenresToString(List<ArtistGenre> genres)
+    public static string GenresToString(IEnumerable<ArtistGenre> genres)
     {
-        var genreString = new StringBuilder();
-        for (var i = 0; i < genres.Count; i++)
-        {
-            if (i != 0)
-            {
-                genreString.Append(" - ");
-            }
-
-            var genre = genres[i];
-            genreString.Append($"{genre.Name}");
-        }
-
-        return genreString.ToString();
+        return StringService.StringListToLongString(genres.Select(s => s.Name).ToList());
     }
 }

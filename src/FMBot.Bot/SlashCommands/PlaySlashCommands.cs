@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
-using Discord;
 using Discord.Interactions;
 using Fergun.Interactive;
 using FMBot.Bot.Attributes;
@@ -92,46 +92,45 @@ public class PlaySlashCommands : InteractionModuleBase
 
         try
         {
-            if (message != null && response.CommandResponse == CommandResponse.Ok && this.Context.Guild != null)
+            if (message != null && response.CommandResponse == CommandResponse.Ok)
             {
-                await this._guildService.AddReactionsAsync(message, this.Context.Guild);
+                if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any())
+                {
+                    await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
+                }
+                else if (this.Context.Guild != null)
+                {
+                    await this._guildService.AddGuildReactionsAsync(message, this.Context.Guild);
+                }
             }
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e, "Could not add emote reactions");
+            await this.Context.HandleCommandException(e, "Could not add emote reactions", sendReply: false);
             await ReplyAsync(
-                $"Couldn't add emote reactions to `/fm`. If you have recently changed changed any of the configured emotes please use `/serverreactions` to reset the automatic emote reactions.");
+                $"Could not add automatic emoji reactions to `/fm`. Make sure the emojis still exist, the bot is the same server as where the emojis come from and the bot has permission to `Add Reactions`.");
         }
     }
 
     [SlashCommand("recent", "Shows you or someone else their recent tracks")]
     [UsernameSetRequired]
     public async Task RecentAsync(
-        [Summary("User", "The user to show (defaults to self)")] string user = null,
-        [Summary("Amount", "Amount of recent tracks to show")] int amount = 5)
+        [Summary("User", "The user to show (defaults to self)")] string user = null)
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
         var userSettings = await this._settingService.GetUser(user, contextUser, this.Context.Guild, this.Context.User, true);
 
-        if (amount > 10)
-        {
-            amount = 10;
-        }
-
         try
         {
             var response = await this._playBuilder.RecentAsync(new ContextModel(this.Context, contextUser),
-                userSettings, amount);
+                userSettings);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await ReplyAsync(
-                "Unable to show your recent tracks on Last.fm due to an internal error. Please try again later or contact .fmbot support.");
+            await this.Context.HandleCommandException(e, deferFirst: true);
         }
     }
 
@@ -154,33 +153,37 @@ public class PlaySlashCommands : InteractionModuleBase
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await ReplyAsync(
-                "Unable to show your streak on Last.fm due to an internal error. Please try again later or contact .fmbot support.");
+            await this.Context.HandleCommandException(e, deferFirst: true);
         }
     }
 
     [SlashCommand("streakhistory", "Shows you or someone else their streak history")]
     [UsernameSetRequired]
     public async Task StreakHistory(
-        [Summary("User", "The user to show (defaults to self)")] string user = null)
+        [Summary("Action", "The action to do")] StreakHistoryAction action = StreakHistoryAction.View,
+        [Summary("User", "The user to show (defaults to self)")] string user = null,
+        [Summary("Delete", "Enter the deletion ID here to delete a streak")] long? selectedStreak = null)
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
         var userSettings = await this._settingService.GetUser(user, contextUser, this.Context.Guild, this.Context.User, true);
 
         try
         {
-            var response = await this._playBuilder.StreakHistoryAsync(new ContextModel(this.Context, contextUser), userSettings);
+            var response = await this._playBuilder.StreakHistoryAsync(new ContextModel(this.Context, contextUser), userSettings, action == StreakHistoryAction.Modify, selectedStreak);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await ReplyAsync(
-                "Unable to show your streak on Last.fm due to an internal error. Please try again later or contact .fmbot support.");
+            await this.Context.HandleCommandException(e, deferFirst: true);
         }
+    }
+
+    public enum StreakHistoryAction
+    {
+        View = 1,
+        Modify = 2
     }
 
     [SlashCommand("overview", "Shows a daily overview")]
@@ -205,14 +208,11 @@ public class PlaySlashCommands : InteractionModuleBase
                 userSettings, amount);
 
             await this.Context.SendFollowUpResponse(this.Interactivity, response);
-            this.Context.LogCommandUsed();
+            this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await FollowupAsync(
-                "Unable to show your overview due to an internal error. Please try again later or contact .fmbot support.",
-                ephemeral: true);
+            await this.Context.HandleCommandException(e);
         }
     }
 
@@ -234,29 +234,15 @@ public class PlaySlashCommands : InteractionModuleBase
             var goalAmount = SettingService.GetGoalAmount(amount.ToString(), userInfo.Playcount);
             var timeSettings = SettingService.GetTimePeriod(timePeriod, TimePeriod.AllTime);
 
-            long timeFrom;
-            if (timeSettings.TimePeriod != TimePeriod.AllTime && timeSettings.PlayDays != null)
-            {
-                var dateAgo = DateTime.UtcNow.AddDays(-timeSettings.PlayDays.Value);
-                timeFrom = ((DateTimeOffset)dateAgo).ToUnixTimeSeconds();
-            }
-            else
-            {
-                timeFrom = userInfo.Registered.Unixtime;
-            }
-
             var response = await this._playBuilder.PaceAsync(new ContextModel(this.Context, contextUser),
                 userSettings, timeSettings, goalAmount, userInfo.Playcount, userInfo.Registered.Unixtime);
 
             await this.Context.SendFollowUpResponse(this.Interactivity, response);
-            this.Context.LogCommandUsed();
+            this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await FollowupAsync(
-                "Unable to show your pace due to an internal error. Please try again later or contact .fmbot support.",
-                ephemeral: true);
+            await this.Context.HandleCommandException(e);
         }
     }
 
@@ -280,14 +266,37 @@ public class PlaySlashCommands : InteractionModuleBase
                 userSettings, mileStoneAmount, userInfo.Playcount);
 
             await this.Context.SendFollowUpResponse(this.Interactivity, response);
-            this.Context.LogCommandUsed();
+            this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await FollowupAsync(
-                "Unable to show your milestone due to an internal error. Please try again later or contact .fmbot support.",
-                ephemeral: true);
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [SlashCommand("year", "Shows an overview of your year")]
+    [UsernameSetRequired]
+    public async Task YearAsync(
+        [Summary("Year", "Year to view")] int? year = null,
+        [Summary("User", "The user to show (defaults to self)")] string user = null)
+    {
+        _ = DeferAsync();
+
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var userSettings = await this._settingService.GetUser(user, contextUser, this.Context.Guild, this.Context.User, true);
+        var parsedYear = SettingService.GetYear(year?.ToString()).GetValueOrDefault(DateTime.UtcNow.AddDays(-90).Year);
+
+        try
+        {
+            var response = await this._playBuilder.YearAsync(new ContextModel(this.Context, contextUser),
+                userSettings, parsedYear);
+
+            await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
         }
     }
 }

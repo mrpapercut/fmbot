@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Discord.Interactions;
 using Fergun.Interactive;
@@ -7,7 +8,9 @@ using FMBot.Bot.AutoCompleteHandlers;
 using FMBot.Bot.Builders;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Models;
+using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
+using FMBot.Domain.Models;
 
 namespace FMBot.Bot.SlashCommands;
 
@@ -16,15 +19,17 @@ public class AlbumSlashCommands : InteractionModuleBase
     private readonly UserService _userService;
     private readonly AlbumBuilders _albumBuilders;
     private readonly SettingService _settingService;
+    private readonly AlbumService _albumService;
 
     private InteractiveService Interactivity { get; }
 
-    public AlbumSlashCommands(UserService userService, SettingService settingService, AlbumBuilders albumBuilders, InteractiveService interactivity)
+    public AlbumSlashCommands(UserService userService, SettingService settingService, AlbumBuilders albumBuilders, InteractiveService interactivity, AlbumService albumService)
     {
         this._userService = userService;
         this._settingService = settingService;
         this._albumBuilders = albumBuilders;
         this.Interactivity = interactivity;
+        this._albumService = albumService;
     }
 
     [SlashCommand("album", "Shows album info for the album you're currently listening to or searching for")]
@@ -35,7 +40,7 @@ public class AlbumSlashCommands : InteractionModuleBase
     {
         _ = DeferAsync();
 
-        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var contextUser = await this._userService.GetUserWithDiscogs(this.Context.User.Id);
 
         try
         {
@@ -46,10 +51,129 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await FollowupAsync(
-                "Unable to show your album due to an internal error. Please try again later or contact .fmbot support.",
-                ephemeral: true);
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [SlashCommand("wkalbum", "Shows what other users listen to an album in your server")]
+    [UsernameSetRequired]
+    public async Task WhoKnowsAlbumAsync(
+        [Summary("Album", "The album your want to search for (defaults to currently playing)")]
+        [Autocomplete(typeof(AlbumAutoComplete))] string name = null,
+        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Role-picker", "Display a rolepicker to filter with roles")] bool displayRoleFilter = false)
+    {
+        _ = DeferAsync();
+
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        mode ??= contextUser.Mode ?? WhoKnowsMode.Embed;
+
+        try
+        {
+            var response = await this._albumBuilders.WhoKnowsAlbumAsync(new ContextModel(this.Context, contextUser), mode.Value, name);
+
+            await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [ComponentInteraction($"{InteractionConstants.WhoKnowsAlbumRolePicker}-*")]
+    [UsernameSetRequired]
+    [RequiresIndex]
+    public async Task WhoKnowsFilteringAsync(string albumId, string[] inputs)
+    {
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        var album = await this._albumService.GetAlbumForId(int.Parse(albumId));
+
+        var roleIds = new List<ulong>();
+        if (inputs != null)
+        {
+            foreach (var input in inputs)
+            {
+                var roleId = ulong.Parse(input);
+                roleIds.Add(roleId);
+            }
+        }
+
+        try
+        {
+            var response = await this._albumBuilders.WhoKnowsAlbumAsync(new ContextModel(this.Context, contextUser), WhoKnowsMode.Embed, $"{album.ArtistName} | {album.Name}", true, roleIds);
+
+            await this.Context.UpdateInteractionEmbed(response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [SlashCommand("fwkalbum", "Shows who of your friends listen to an album")]
+    [UsernameSetRequired]
+    public async Task FriendsWhoKnowAlbumAsync(
+        [Summary("Album", "The album your want to search for (defaults to currently playing)")]
+        [Autocomplete(typeof(AlbumAutoComplete))]
+        string name = null,
+        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Private", "Only show response to you")] bool privateResponse = false)
+    {
+        _ = DeferAsync(privateResponse);
+
+        var contextUser = await this._userService.GetUserWithFriendsAsync(this.Context.User);
+
+        mode ??= contextUser.Mode ?? WhoKnowsMode.Embed;
+
+        try
+        {
+            var response = await this._albumBuilders.FriendsWhoKnowAlbumAsync(new ContextModel(this.Context, contextUser), mode.Value, name);
+
+            await this.Context.SendFollowUpResponse(this.Interactivity, response, privateResponse);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [SlashCommand("gwkalbum", "Shows what other users listen to an album globally in .fmbot")]
+    [UsernameSetRequired]
+    public async Task GlobalWhoKnowsAlbumAsync(
+        [Summary("Album", "The album your want to search for (defaults to currently playing)")]
+        [Autocomplete(typeof(AlbumAutoComplete))]
+        string name = null,
+        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Hide-private", "Hide or show private users")] bool hidePrivate = false)
+    {
+        _ = DeferAsync();
+
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        var currentSettings = new WhoKnowsSettings
+        {
+            HidePrivateUsers = hidePrivate,
+            ShowBotters = false,
+            AdminView = false,
+            NewSearchValue = name,
+            WhoKnowsMode = mode ?? contextUser.Mode ?? WhoKnowsMode.Embed
+        };
+
+        try
+        {
+            var response = await this._albumBuilders.GlobalWhoKnowsAlbumAsync(new ContextModel(this.Context, contextUser), currentSettings, name);
+
+            await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
         }
     }
 
@@ -72,10 +196,7 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await FollowupAsync(
-                "Unable to show your album on Last.fm due to an internal error. Please try again later or contact .fmbot support.",
-                ephemeral: true);
+            await this.Context.HandleCommandException(e);
         }
     }
 
@@ -100,10 +221,7 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await FollowupAsync(
-                "Unable to show your album on Last.fm due to an internal error. Please try again later or contact .fmbot support.",
-                ephemeral: true);
+            await this.Context.HandleCommandException(e);
         }
     }
 
@@ -128,10 +246,7 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
         catch (Exception e)
         {
-            this.Context.LogCommandException(e);
-            await FollowupAsync(
-                "Unable to show your album on Last.fm due to an internal error. Please try again later or contact .fmbot support.",
-                ephemeral: true);
+            await this.Context.HandleCommandException(e);
         }
     }
 }

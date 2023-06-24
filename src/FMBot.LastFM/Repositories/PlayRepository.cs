@@ -13,14 +13,14 @@ namespace FMBot.LastFM.Repositories;
 
 public static class PlayRepository
 {
-    public record PlayUpdate(List<UserPlay> NewPlays, List<UserPlayTs> RemovedPlays);
+    public record PlayUpdate(List<UserPlayTs> NewPlays, List<UserPlayTs> RemovedPlays);
 
-    public static async Task<PlayUpdate> InsertLatestPlays(List<RecentTrack> recentTracks, int userId, NpgsqlConnection connection)
+    public static async Task<PlayUpdate> InsertLatestPlays(IEnumerable<RecentTrack> recentTracks, int userId, NpgsqlConnection connection)
     {
         var plays = recentTracks
             .Where(w => !w.NowPlaying &&
                         w.TimePlayed.HasValue)
-            .Select(s => new UserPlay
+            .Select(s => new UserPlayTs
             {
                 ArtistName = s.ArtistName,
                 AlbumName = s.AlbumName,
@@ -31,9 +31,7 @@ public static class PlayRepository
 
         var existingPlays = await GetUserPlays(userId, connection, plays.Count + 250);
 
-        var firstExistingPlay = existingPlays
-            .OrderBy(o => o.TimePlayed)
-            .FirstOrDefault();
+        var firstExistingPlay = existingPlays.MinBy(o => o.TimePlayed);
 
         if (firstExistingPlay != null)
         {
@@ -42,7 +40,7 @@ public static class PlayRepository
                 .ToList();
         }
 
-        var addedPlays = new List<UserPlay>();
+        var addedPlays = new List<UserPlayTs>();
         foreach (var newPlay in plays)
         {
             if (existingPlays.All(a => a.TimePlayed != newPlay.TimePlayed))
@@ -51,9 +49,7 @@ public static class PlayRepository
             }
         }
 
-        var firstNewPlay = plays
-            .OrderBy(o => o.TimePlayed)
-            .FirstOrDefault();
+        var firstNewPlay = plays.MinBy(o => o.TimePlayed);
 
         var removedPlays = new List<UserPlayTs>();
         if (firstNewPlay != null)
@@ -68,18 +64,21 @@ public static class PlayRepository
 
             if (removedPlays.Any())
             {
-                Log.Information($"Found {removedPlays.Count} time series plays to remove for {userId}");
+                Log.Information("Found {removedPlaysCount} time series plays to remove for {userId}", removedPlays.Count, userId);
                 await RemoveSpecificPlays(removedPlays, connection);
             }
         }
 
-        Log.Information($"Inserting {addedPlays.Count} new time series plays for user {userId}");
-        await InsertTimeSeriesPlays(addedPlays, connection);
-
+        if (addedPlays.Any())
+        {
+            Log.Information("Inserting {addedPlaysCount} new time series plays for user {userId}", addedPlays.Count, userId);
+            await InsertTimeSeriesPlays(addedPlays, connection);
+        }
+        
         return new PlayUpdate(addedPlays, removedPlays);
     }
 
-    public static async Task InsertAllPlays(IReadOnlyList<UserPlay> playsToInsert, int userId, NpgsqlConnection connection)
+    public static async Task InsertAllPlays(IReadOnlyList<UserPlayTs> playsToInsert, int userId, NpgsqlConnection connection)
     {
         await RemoveAllCurrentPlays(userId, connection);
 
@@ -111,9 +110,9 @@ public static class PlayRepository
         }
     }
 
-    private static async Task InsertTimeSeriesPlays(IEnumerable<UserPlay> plays, NpgsqlConnection connection)
+    private static async Task InsertTimeSeriesPlays(IEnumerable<UserPlayTs> plays, NpgsqlConnection connection)
     {
-        var copyHelper = new PostgreSQLCopyHelper<UserPlay>("public", "user_play_ts")
+        var copyHelper = new PostgreSQLCopyHelper<UserPlayTs>("public", "user_play_ts")
             .MapText("track_name", x => x.TrackName)
             .MapText("album_name", x => x.AlbumName)
             .MapText("artist_name", x => x.ArtistName)
@@ -123,15 +122,31 @@ public static class PlayRepository
         await copyHelper.SaveAllAsync(connection, plays);
     }
 
-    private static async Task<IReadOnlyCollection<UserPlayTs>> GetUserPlays(int userId, NpgsqlConnection connection, int limit)
+    public static async Task<IReadOnlyList<UserPlayTs>> GetUserPlays(int userId, NpgsqlConnection connection, int limit)
     {
-        const string sql = "SELECT * FROM public.user_play_ts where user_id = @userId " +
+        const string sql = "SELECT * FROM public.user_play_ts WHERE user_id = @userId " +
                            "ORDER BY time_played DESC LIMIT @limit";
         DefaultTypeMap.MatchNamesWithUnderscores = true;
         return (await connection.QueryAsync<UserPlayTs>(sql, new
         {
             userId,
             limit
+        })).ToList();
+    }
+
+    public static async Task<IReadOnlyCollection<UserPlayTs>> GetUserPlaysWithinTimeRange(int userId, NpgsqlConnection connection, DateTime start, DateTime? end = null)
+    {
+        end ??= DateTime.UtcNow;
+
+        const string sql = "SELECT * FROM public.user_play_ts WHERE user_id = @userId " +
+                           "AND time_played >= @start AND time_played <= @end  " +
+                           "ORDER BY time_played DESC ";
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        return (await connection.QueryAsync<UserPlayTs>(sql, new
+        {
+            userId,
+            start,
+            end
         })).ToList();
     }
 }

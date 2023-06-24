@@ -1,7 +1,10 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Dasync.Collections;
+using Discord;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Models;
@@ -35,6 +38,8 @@ public class FriendBuilders
         this._settingService = settingService;
     }
 
+    private record FriendResult(DateTime? timePlayed, string Result);
+
     public async Task<ResponseModel> FriendsAsync(ContextModel context)
     {
         var response = new ResponseModel
@@ -47,12 +52,13 @@ public class FriendBuilders
         if (friends?.Any() != true)
         {
             response.Embed.WithDescription("We couldn't find any friends. To add friends:\n" +
-                                           $"`{context.Prefix}friendsadd {Constants.UserMentionOrLfmUserNameExample.Replace("`", "")}`");
+                                           $"`{context.Prefix}friendsadd {Constants.UserMentionOrLfmUserNameExample.Replace("`", "")}`\n\n" +
+                                           $"Or right-click a user, go to apps and click 'Add as friend'");
             response.CommandResponse = CommandResponse.NotFound;
             return response;
         }
 
-        var guild = await this._guildService.GetGuildForWhoKnows(context.DiscordGuild.Id);
+        var guild = await this._guildService.GetGuildForWhoKnows(context.DiscordGuild?.Id);
 
         var embedFooterText = "Amount of scrobbles of all your friends together: ";
         string embedTitle;
@@ -78,7 +84,7 @@ public class FriendBuilders
         response.Embed.WithAuthor(response.EmbedAuthor);
 
         var totalPlaycount = 0;
-        var embedDescription = "";
+        var friendResult = new List<FriendResult>();
         await friends.ParallelForEachAsync(async friend =>
         {
             var friendUsername = friend.LastFMUserName;
@@ -92,7 +98,7 @@ public class FriendBuilders
                     friendNameToDisplay = guildUser.UserName;
 
                     var user = await this._userService.GetUserForIdAsync(guildUser.UserId);
-                    var discordUser = await context.DiscordGuild.GetUserAsync(user.DiscordUserId);
+                    var discordUser = await context.DiscordGuild.GetUserAsync(user.DiscordUserId, CacheMode.CacheOnly);
                     if (discordUser?.Username != null)
                     {
                         friendNameToDisplay = discordUser.Nickname ?? discordUser.Username;
@@ -128,6 +134,7 @@ public class FriendBuilders
             }
 
             string track;
+            DateTime? timePlayed = null;
             if (!tracks.Success || tracks.Content == null)
             {
                 track = $"Friend could not be retrieved ({tracks.Error})";
@@ -142,23 +149,31 @@ public class FriendBuilders
                 track = LastFmRepository.TrackToOneLinedString(lastTrack);
                 if (lastTrack.NowPlaying)
                 {
+                    timePlayed = new DateTime(2200, 1, 1);
                     track += " 🎶";
                 }
                 else if (lastTrack.TimePlayed.HasValue)
                 {
+                    timePlayed = lastTrack.TimePlayed.Value;
                     track += $" ({StringExtensions.GetTimeAgoShortString(lastTrack.TimePlayed.Value)})";
                 }
 
                 totalPlaycount += (int)tracks.Content.TotalAmount;
             }
 
-            embedDescription += $"**[{friendNameToDisplay}]({Constants.LastFMUserUrl}{friendUsername})** | {track}\n";
+            friendResult.Add(new FriendResult(timePlayed, $"**[{friendNameToDisplay}]({Constants.LastFMUserUrl}{friendUsername})** | {track}"));
         }, maxDegreeOfParallelism: 3);
 
         response.EmbedFooter.WithText(embedFooterText + totalPlaycount.ToString("0"));
         response.Embed.WithFooter(response.EmbedFooter);
 
-        response.Embed.WithDescription(embedDescription);
+        var embedDescription = new StringBuilder();
+        foreach (var friend in friendResult.OrderByDescending(o => o.timePlayed).ThenBy(o => o.Result))
+        {
+            embedDescription.AppendLine(friend.Result);
+        }
+
+        response.Embed.WithDescription(embedDescription.ToString());
 
         return response;
     }
@@ -196,7 +211,7 @@ public class FriendBuilders
             if (foundFriend.DifferentUser)
             {
                 friendUsername = foundFriend.UserNameLastFm;
-                friendUserId = foundFriend.UserId;
+                friendUserId = foundFriend.UserId != 0 ? foundFriend.UserId : null;
             }
             else
             {
@@ -235,7 +250,8 @@ public class FriendBuilders
             {
                 response.Embed.AddField("Friend limit reached",
                     $"Sorry, but you can't have more than {Constants.MaxFriends} friends. \n\n" +
-                    $"Did you know that .fmbot supporters can add up to {Constants.MaxFriendsSupporter} friends? [Get supporter here](https://opencollective.com/fmbot/contribute) or use `{context.Prefix}donate` for more info.");
+                    $".fmbot supporters can add up to {Constants.MaxFriendsSupporter} friends. [Click here to view all perks of being a supporter]({Constants.GetSupporterOverviewLink}).");
+                response.Components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: SupporterService.GetSupporterLink());
             }
             else
             {
@@ -281,7 +297,7 @@ public class FriendBuilders
 
         response.Embed.WithDescription(reply);
 
-        if (context.ContextUser.UserType != UserType.User && !friendLimitReached)
+        if (context.ContextUser.UserType != UserType.User && !friendLimitReached && existingFriends.Count >= Constants.MaxFriendsSupporter - 5)
         {
             var userType = context.ContextUser.UserType.ToString().ToLower();
             response.Embed.WithFooter(

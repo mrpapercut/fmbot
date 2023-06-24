@@ -8,6 +8,7 @@ using Fergun.Interactive;
 using FMBot.Bot.Attributes;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Interfaces;
+using FMBot.Bot.Models.MusicBot;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
@@ -28,8 +29,6 @@ public class CommandHandler
     private readonly GuildService _guildService;
     private readonly IPrefixService _prefixService;
     private readonly InteractiveService _interactiveService;
-    private readonly IGuildDisabledCommandService _guildDisabledCommandService;
-    private readonly IChannelDisabledCommandService _channelDisabledCommandService;
     private readonly IServiceProvider _provider;
     private readonly BotSettings _botSettings;
     private readonly IMemoryCache _cache;
@@ -40,8 +39,6 @@ public class CommandHandler
         CommandService commands,
         IServiceProvider provider,
         IPrefixService prefixService,
-        IGuildDisabledCommandService guildDisabledCommandService,
-        IChannelDisabledCommandService channelDisabledCommandService,
         UserService userService,
         MusicBotService musicBotService,
         IOptions<BotSettings> botSettings,
@@ -53,8 +50,6 @@ public class CommandHandler
         this._commands = commands;
         this._provider = provider;
         this._prefixService = prefixService;
-        this._guildDisabledCommandService = guildDisabledCommandService;
-        this._channelDisabledCommandService = channelDisabledCommandService;
         this._userService = userService;
         this._musicBotService = musicBotService;
         this._guildService = guildService;
@@ -62,6 +57,7 @@ public class CommandHandler
         this._cache = cache;
         this._botSettings = botSettings.Value;
         this._discord.MessageReceived += OnMessageReceivedAsync;
+        this._discord.MessageUpdated += OnMessageUpdatedAsync;
     }
 
     private async Task OnMessageReceivedAsync(SocketMessage s)
@@ -80,21 +76,21 @@ public class CommandHandler
         // Create the command context
         var context = new ShardedCommandContext(this._discord, msg);
 
-        if (msg.Author != null && msg.Author.IsBot)
+        if (msg.Author != null && msg.Author.IsBot && msg.Flags != MessageFlags.Loading)
         {
             if (string.IsNullOrWhiteSpace(msg.Author.Username))
             {
                 return;
             }
-            if (msg.Author.Username.StartsWith("Hydra"))
-            {
-                await this._musicBotService.ScrobbleHydra(msg, context);
-            }
-            if (msg.Author.Username.StartsWith("Cakey Bot"))
-            {
-                await this._musicBotService.ScrobbleCakeyBot(msg, context);
-            }
-            return; // Ignore other bots
+            TryScrobbling(msg, context);
+            return;
+        }
+
+        if (context.Guild != null &&
+            PublicProperties.PremiumServers.ContainsKey(context.Guild.Id) &&
+            PublicProperties.RegisteredUsers.ContainsKey(context.User.Id))
+        {
+            _ = Task.Run(() => UpdateUserLastMessageDate(context));
         }
 
         var argPos = 0; // Check if the message has a valid command prefix
@@ -138,6 +134,36 @@ public class CommandHandler
         }
     }
 
+    private async void TryScrobbling(SocketUserMessage msg, ICommandContext context)
+    {
+        foreach (var musicBot in MusicBot.SupportedBots)
+        {
+            if (musicBot.IsAuthor(msg.Author))
+            {
+                await this._musicBotService.Scrobble(musicBot, msg, context);
+                break;
+            }
+        }
+    }
+
+    private async Task OnMessageUpdatedAsync(Cacheable<IMessage, ulong> originalMessage, SocketMessage updatedMessage, ISocketMessageChannel sourceChannel)
+    {
+        var msg = updatedMessage as SocketUserMessage;
+
+        if (msg == null || msg.Author == null || !msg.Author.IsBot || msg.Interaction == null)
+        {
+            return;
+        }
+
+        var context = new ShardedCommandContext(this._discord, msg);
+
+
+        if (msg.Flags != MessageFlags.Loading)
+        {
+            TryScrobbling(msg, context);
+        }
+    }
+
     private async Task ExecuteCommand(SocketUserMessage msg, ShardedCommandContext context, int argPos, string prfx)
     {
         var searchResult = this._commands.Search(context, argPos);
@@ -148,7 +174,7 @@ public class CommandHandler
             return;
         }
 
-        if (!await CommandDisabled(context, searchResult))
+        if (!await CommandEnabled(context, searchResult))
         {
             return;
         }
@@ -171,7 +197,7 @@ public class CommandHandler
                 return;
             }
 
-            if (!await CommandDisabled(context, fmSearchResult))
+            if (!await CommandEnabled(context, fmSearchResult))
             {
                 return;
             }
@@ -209,6 +235,7 @@ public class CommandHandler
                 var embed = new EmbedBuilder()
                     .WithColor(DiscordConstants.LastFmColorRed);
                 var userNickname = (context.User as SocketGuildUser)?.Nickname;
+
                 embed.UsernameNotSetErrorResponse(prfx ?? this._botSettings.Bot.Prefix, userNickname ?? context.User.Username);
                 await context.Channel.SendMessageAsync("", false, embed.Build());
                 context.LogCommandUsed(CommandResponse.UsernameNotSet);
@@ -261,11 +288,11 @@ public class CommandHandler
                 context.LogCommandUsed(CommandResponse.IndexRequired);
                 return;
             }
-            if (lastIndex < DateTime.UtcNow.AddDays(-120))
+            if (lastIndex < DateTime.UtcNow.AddDays(-180))
             {
                 var embed = new EmbedBuilder();
-                embed.WithDescription("Server index data is out of date, it was last updated over 120 days ago.\n" +
-                                      $"Please run `{prfx}index` to re-index this server.");
+                embed.WithDescription("Server member cache is out of date, it was last updated over 180 days ago.\n" +
+                                      $"Please run `{prfx}refreshmembers` to update the cached memberlist.");
                 await context.Channel.SendMessageAsync("", false, embed.Build());
                 context.LogCommandUsed(CommandResponse.IndexRequired);
                 return;
@@ -318,12 +345,27 @@ public class CommandHandler
         return true;
     }
 
-
-    private async Task<bool> CommandDisabled(SocketCommandContext context, SearchResult searchResult)
+    private async Task<bool> CommandEnabled(SocketCommandContext context, SearchResult searchResult)
     {
         if (context.Guild != null)
         {
-            var disabledGuildCommands = this._guildDisabledCommandService.GetDisabledCommands(context.Guild?.Id);
+            if (searchResult.Commands != null &&
+                searchResult.Commands.Any(a => a.Command.Name.ToLower() == "togglecommand" ||
+                                               a.Command.Name.ToLower() == "toggleservercommand"))
+            {
+                return true;
+            }
+
+            var channelDisabled = DisabledChannelService.GetDisabledChannel(context.Channel.Id);
+            if (channelDisabled)
+            {
+                _ = this._interactiveService.DelayedDeleteMessageAsync(
+                    await context.Channel.SendMessageAsync("The bot has been disabled in this channel."),
+                    TimeSpan.FromSeconds(8));
+                return false;
+            }
+
+            var disabledGuildCommands = GuildDisabledCommandService.GetDisabledCommands(context.Guild?.Id);
             if (searchResult.Commands != null &&
                 disabledGuildCommands != null &&
                 disabledGuildCommands.Any(searchResult.Commands[0].Command.Name.Equals))
@@ -334,7 +376,7 @@ public class CommandHandler
                 return false;
             }
 
-            var disabledChannelCommands = this._channelDisabledCommandService.GetDisabledCommands(context.Channel?.Id);
+            var disabledChannelCommands = ChannelDisabledCommandService.GetDisabledCommands(context.Channel?.Id);
             if (searchResult.Commands != null &&
                 disabledChannelCommands != null &&
                 disabledChannelCommands.Any() &&
@@ -351,13 +393,36 @@ public class CommandHandler
         return true;
     }
 
-    private async Task UserBlockedResponse(SocketCommandContext shardedCommandContext, string s)
+    private async Task UserBlockedResponse(SocketCommandContext context, string s)
     {
         var embed = new EmbedBuilder()
             .WithColor(DiscordConstants.LastFmColorRed);
         embed.UserBlockedResponse(s ?? this._botSettings.Bot.Prefix);
-        await shardedCommandContext.Channel.SendMessageAsync("", false, embed.Build());
-        shardedCommandContext.LogCommandUsed(CommandResponse.UserBlocked);
+        await context.Channel.SendMessageAsync("", false, embed.Build());
+        context.LogCommandUsed(CommandResponse.UserBlocked);
         return;
+    }
+
+    private async Task UpdateUserLastMessageDate(SocketCommandContext context)
+    {
+        var cacheKey = $"{context.User.Id}-{context.Guild.Id}-last-message-updated";
+        if (this._cache.TryGetValue(cacheKey, out _))
+        {
+            return;
+        }
+
+        this._cache.Set(cacheKey, 1, TimeSpan.FromMinutes(15));
+
+        var guildSuccess = PublicProperties.PremiumServers.TryGetValue(context.Guild.Id, out var guildId);
+        var userSuccess = PublicProperties.RegisteredUsers.TryGetValue(context.User.Id, out var userId);
+
+        var guildUser = await ((IGuild)context.Guild).GetUserAsync(context.User.Id, CacheMode.CacheOnly);
+
+        if (!guildSuccess || !userSuccess || guildUser == null)
+        {
+            return;
+        }
+
+        await this._guildService.UpdateGuildUserLastMessageDate(guildUser, userId, guildId);
     }
 }
