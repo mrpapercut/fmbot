@@ -15,9 +15,11 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
+using FMBot.Domain.Types;
 using FMBot.LastFM.Domain.Types;
-using FMBot.LastFM.Extensions;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using Genius.Models.User;
@@ -36,7 +38,7 @@ public class PlayBuilder
     private readonly IIndexService _indexService;
     private readonly IPrefixService _prefixService;
     private readonly IUpdateService _updateService;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly PlayService _playService;
     private readonly GenreService _genreService;
     private readonly SettingService _settingService;
@@ -55,7 +57,7 @@ public class PlayBuilder
         IIndexService indexService,
         IPrefixService prefixService,
         IUpdateService updateService,
-        LastFmRepository lastFmRepository,
+        IDataSourceFactory dataSourceFactory,
         PlayService playService,
         SettingService settingService,
         UserService userService,
@@ -73,7 +75,7 @@ public class PlayBuilder
     {
         this._guildService = guildService;
         this._indexService = indexService;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._playService = playService;
         this._prefixService = prefixService;
         this._settingService = settingService;
@@ -113,7 +115,7 @@ public class PlayBuilder
             if (context.ContextUser.LastIndexed == null)
             {
                 _ = this._indexService.IndexUser(context.ContextUser);
-                recentTracks = await this._lastFmRepository.GetRecentTracksAsync(userSettings.UserNameLastFm,
+                recentTracks = await this._dataSourceFactory.GetRecentTracksAsync(userSettings.UserNameLastFm,
                     useCache: true, sessionKey: sessionKey);
             }
             else
@@ -124,7 +126,7 @@ public class PlayBuilder
         else
         {
             recentTracks =
-                await this._lastFmRepository.GetRecentTracksAsync(userSettings.UserNameLastFm, useCache: true);
+                await this._dataSourceFactory.GetRecentTracksAsync(userSettings.UserNameLastFm, useCache: true);
         }
 
         if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
@@ -213,15 +215,15 @@ public class PlayBuilder
             default:
                 if (embedType == FmEmbedType.EmbedMini || embedType == FmEmbedType.EmbedTiny)
                 {
-                    fmText += StringService.TrackToLinkedString(currentTrack, context.ContextUser.RymEnabled);
+                    fmText += StringService.TrackToLinkedString(currentTrack, context.ContextUser.RymEnabled, embedType == FmEmbedType.EmbedMini);
                     response.Embed.WithDescription(fmText);
                 }
                 else if (previousTrack != null)
                 {
                     response.Embed.AddField("Current:",
-                        StringService.TrackToLinkedString(currentTrack, context.ContextUser.RymEnabled));
+                        StringService.TrackToLinkedString(currentTrack, context.ContextUser.RymEnabled, false));
                     response.Embed.AddField("Previous:",
-                        StringService.TrackToLinkedString(previousTrack, context.ContextUser.RymEnabled));
+                        StringService.TrackToLinkedString(previousTrack, context.ContextUser.RymEnabled, false));
                 }
 
                 string headerText;
@@ -308,7 +310,7 @@ public class PlayBuilder
             if (context.ContextUser.LastIndexed == null)
             {
                 _ = this._indexService.IndexUser(context.ContextUser);
-                recentTracks = await this._lastFmRepository.GetRecentTracksAsync(userSettings.UserNameLastFm,
+                recentTracks = await this._dataSourceFactory.GetRecentTracksAsync(userSettings.UserNameLastFm,
                     useCache: true, sessionKey: sessionKey);
             }
             else
@@ -319,7 +321,7 @@ public class PlayBuilder
         else
         {
             recentTracks =
-                await this._lastFmRepository.GetRecentTracksAsync(userSettings.UserNameLastFm, 120, useCache: true);
+                await this._dataSourceFactory.GetRecentTracksAsync(userSettings.UserNameLastFm, 120, useCache: true);
         }
 
         if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
@@ -460,7 +462,7 @@ public class PlayBuilder
 
         }
 
-        response.EmbedAuthor.WithUrl($"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library");
+        response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library");
         response.Embed.WithAuthor(response.EmbedAuthor);
 
         return response;
@@ -484,7 +486,7 @@ public class PlayBuilder
                 ? $"Streak history for {await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser)}"
                 : $"Streak history for {userSettings.UserNameLastFm}, requested by {await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser)}");
 
-        response.EmbedAuthor.WithUrl($"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library");
+        response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library");
 
         if (!streaks.Any())
         {
@@ -583,6 +585,8 @@ public class PlayBuilder
             return response;
         }
 
+        var description = new StringBuilder();
+        
         foreach (var day in week.Days.OrderByDescending(o => o.Date))
         {
             var genreString = new StringBuilder();
@@ -601,29 +605,34 @@ public class PlayBuilder
             }
 
             response.Embed.AddField(
-                $"{day.Playcount} {StringExtensions.GetPlaysString(day.Playcount)} - {StringExtensions.GetListeningTimeString(day.ListeningTime)} - <t:{day.Date.ToUnixEpochDate()}:D>",
+                $"<t:{day.Date.ToUnixEpochDate()}:D> - {StringExtensions.GetListeningTimeString(day.ListeningTime)} - {day.Playcount} {StringExtensions.GetPlaysString(day.Playcount)}",
                 $"{genreString}\n" +
                 $"{day.TopArtist}\n" +
                 $"{day.TopAlbum}\n" +
-                $"{day.TopTrack}"
+                $"{day.TopTrack}\n"
             );
         }
 
-        var description = $"Top genres, artist, album and track for last {amount} days";
-
-        if (week.Days.Count < amount)
-        {
-            description += $"\n{amount - week.Days.Count} days not shown because of no plays.";
-        }
-
-        response.Embed.WithDescription(description);
+        response.Embed.WithDescription(description.ToString());
 
         response.EmbedAuthor.WithName($"Daily overview for {StringExtensions.Sanitize(userSettings.DisplayName)}{userSettings.UserType.UserTypeToIcon()}");
 
-        response.EmbedAuthor.WithUrl($"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library?date_preset=LAST_7_DAYS");
+        response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library?date_preset=LAST_7_DAYS");
         response.Embed.WithAuthor(response.EmbedAuthor);
 
-        response.EmbedFooter.WithText($"{week.Uniques} unique tracks - {week.Playcount} total plays - avg {Math.Round(week.AvgPerDay, 1)} per day");
+        var footer = new StringBuilder();
+
+        footer.AppendLine($"Top genres, artist, album and track for last {amount} days");
+
+        if (week.Days.Count < amount)
+        {
+            footer.AppendLine($"{amount - week.Days.Count} days not shown because of no plays.");
+        }
+
+        footer.AppendLine(
+            $"{week.Uniques} unique tracks - {week.Playcount} total plays - avg {Math.Round(week.AvgPerDay, 1)} per day");
+
+        response.EmbedFooter.WithText(footer.ToString());
         response.Embed.WithFooter(response.EmbedFooter);
 
         return response;
@@ -650,7 +659,7 @@ public class PlayBuilder
         }
         else
         {
-            count = await this._lastFmRepository.GetScrobbleCountFromDateAsync(userSettings.UserNameLastFm, timeSettings.TimeFrom, userSettings.SessionKeyLastFm);
+            count = await this._dataSourceFactory.GetScrobbleCountFromDateAsync(userSettings.UserNameLastFm, timeSettings.TimeFrom, userSettings.SessionKeyLastFm);
         }
 
         if (count is null or 0)
@@ -702,7 +711,7 @@ public class PlayBuilder
     public async Task<ResponseModel> MileStoneAsync(
         ContextModel context,
         UserSettingsModel userSettings,
-        long mileStoneAmount,
+        int mileStoneAmount,
         long userTotalPlaycount)
     {
         var response = new ResponseModel
@@ -710,7 +719,7 @@ public class PlayBuilder
             ResponseType = ResponseType.Embed,
         };
 
-        var mileStonePlay = await this._lastFmRepository.GetMilestoneScrobbleAsync(userSettings.UserNameLastFm, userSettings.SessionKeyLastFm, userTotalPlaycount, mileStoneAmount);
+        var mileStonePlay = await this._dataSourceFactory.GetMilestoneScrobbleAsync(userSettings.UserNameLastFm, userSettings.SessionKeyLastFm, userTotalPlaycount, mileStoneAmount);
 
         if (!mileStonePlay.Success || mileStonePlay.Content == null)
         {
@@ -740,7 +749,7 @@ public class PlayBuilder
         if (mileStonePlay.Content.TimePlayed.HasValue)
         {
             var dateString = mileStonePlay.Content.TimePlayed.Value.ToString("yyyy-M-dd");
-            response.Embed.WithUrl($"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library?from={dateString}&to={dateString}");
+            response.Embed.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library?from={dateString}&to={dateString}");
 
             reply.AppendLine($"Date played: **<t:{mileStonePlay.Content.TimePlayed.Value.ToUnixEpochDate()}:D>**");
         }
@@ -909,7 +918,7 @@ public class PlayBuilder
 
                 var previousPosition = previousTopAlbum == null ? null : yearOverview.PreviousTopAlbums?.TopAlbums?.IndexOf(previousTopAlbum);
 
-                albumDescription.AppendLine(StringService.GetBillboardLine($"**{topAlbum.ArtistName}** - **{topAlbum.AlbumName}**", i, previousPosition).Text);
+                albumDescription.AppendLine(StringService.GetBillboardLine($"**{topAlbum.ArtistName}** - **{StringExtensions.TruncateLongString(topAlbum.AlbumName, 40)}**", i, previousPosition).Text);
             }
             fields.Add(new EmbedFieldBuilder().WithName("Albums").WithValue(albumDescription.ToString()));
         }
@@ -1009,8 +1018,8 @@ public class PlayBuilder
             {
                 var newArtist = topNewArtists.OrderBy(o => o.FirstPlay).ToList()[i];
 
-                newArtistDescription.AppendLine($"**[{newArtist.ArtistName}]({LastfmUrlExtensions.GetArtistUrl(newArtist.ArtistName)})** " +
-                                                $"- **{newArtist.UserPlaycount}** {StringExtensions.GetPlaysString(newArtist.UserPlaycount)} " +
+                newArtistDescription.AppendLine($"**[{newArtist.ArtistName}]({LastfmUrlExtensions.GetArtistUrl(newArtist.ArtistName)}) " +
+                                                $"- {newArtist.UserPlaycount}** {StringExtensions.GetPlaysString(newArtist.UserPlaycount)} " +
                                                 $"- On **<t:{newArtist.FirstPlay.Value.ToUnixEpochDate()}:D>**");
             }
 

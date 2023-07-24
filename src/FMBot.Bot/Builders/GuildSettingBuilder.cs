@@ -14,6 +14,7 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Domain;
 using FMBot.Domain.Attributes;
+using FMBot.Domain.Extensions;
 using FMBot.Domain.Models;
 using Microsoft.Extensions.Options;
 
@@ -605,7 +606,7 @@ public class GuildSettingBuilder
                     }
 
                     description.AppendLine(
-                        $"`{blockedUser.DiscordUserId}` — **{StringExtensions.Sanitize(blockedUser.UserName)}** — [`{blockedUser.UserNameLastFM}`]({Constants.LastFMUserUrl}{blockedUser.UserNameLastFM}) ");
+                        $"`{blockedUser.DiscordUserId}` — **{StringExtensions.Sanitize(blockedUser.UserName)}** — [`{blockedUser.UserNameLastFM}`]({LastfmUrlExtensions.GetUserUrl(blockedUser.UserNameLastFM)}) ");
                 }
 
                 pages.Add(new PageBuilder()

@@ -72,7 +72,6 @@ namespace FMBot.Persistence.EntityFrameWork
         {
             modelBuilder.HasPostgresExtension("citext");
             modelBuilder.HasPostgresExtension("pg_trgm");
-            modelBuilder.HasPostgresExtension("timescaledb");
 
             modelBuilder.Entity<Friend>(entity =>
             {
@@ -264,22 +263,6 @@ namespace FMBot.Persistence.EntityFrameWork
                     .WithMany(a => a.Plays)
                     .HasForeignKey(f => f.UserId)
                     .OnDelete(DeleteBehavior.Cascade);
-            });
-
-            modelBuilder.Entity<UserPlayTs>(entity =>
-            {
-                entity.HasNoKey();
-
-                entity.HasIndex(i => i.UserId);
-
-                entity.Property(e => e.TrackName)
-                    .HasColumnType("citext");
-
-                entity.Property(e => e.AlbumName)
-                    .HasColumnType("citext");
-
-                entity.Property(e => e.ArtistName)
-                    .HasColumnType("citext");
             });
 
             modelBuilder.Entity<UserCrown>(entity =>

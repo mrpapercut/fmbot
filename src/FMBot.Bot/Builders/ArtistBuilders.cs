@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Threading.Tasks;
@@ -17,12 +16,12 @@ using FMBot.Bot.Services.Guild;
 using FMBot.Bot.Services.ThirdParty;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Images.Generators;
-using FMBot.LastFM.Domain.Models;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
-using Genius.Models.Song;
 using SkiaSharp;
 using Swan;
 using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
@@ -32,7 +31,7 @@ namespace FMBot.Bot.Builders;
 public class ArtistBuilders
 {
     private readonly ArtistsService _artistsService;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly GuildService _guildService;
     private readonly SpotifyService _spotifyService;
     private readonly UserService _userService;
@@ -52,7 +51,7 @@ public class ArtistBuilders
     private readonly CensorService _censorService;
 
     public ArtistBuilders(ArtistsService artistsService,
-        LastFmRepository lastFmRepository,
+        IDataSourceFactory dataSourceFactory,
         GuildService guildService,
         SpotifyService spotifyService,
         UserService userService,
@@ -72,7 +71,7 @@ public class ArtistBuilders
         CensorService censorService)
     {
         this._artistsService = artistsService;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._guildService = guildService;
         this._spotifyService = spotifyService;
         this._userService = userService;
@@ -94,20 +93,23 @@ public class ArtistBuilders
 
     public async Task<ResponseModel> ArtistAsync(
         ContextModel context,
-        string searchValue)
+        string searchValue,
+        bool redirectsEnabled)
     {
         var response = new ResponseModel
         {
             ResponseType = ResponseType.Embed,
         };
 
-        var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, searchValue, context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, userId: context.ContextUser.UserId);
+        var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, searchValue,
+            context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm,
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var spotifyArtistTask = this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, searchValue);
+        var spotifyArtistTask = this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, searchValue, redirectsEnabled);
 
         var fullArtist = await spotifyArtistTask;
 
@@ -153,7 +155,9 @@ public class ArtistBuilders
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(fullArtist.Type))
+        if (!string.IsNullOrWhiteSpace(fullArtist.Type) ||
+            !string.IsNullOrWhiteSpace(fullArtist.Location) ||
+            !string.IsNullOrWhiteSpace(fullArtist.Disambiguation))
         {
             var artistInfo = new StringBuilder();
 
@@ -227,7 +231,7 @@ public class ArtistBuilders
 
             if (artistInfo.Length > 0)
             {
-                if (response.Embed.Description.Length > 0)
+                if (response.Embed.Description is { Length: > 0 })
                 {
                     response.Embed.WithDescription(
                         artistInfo + "\n" + response.Embed.Description);
@@ -347,11 +351,11 @@ public class ArtistBuilders
         return response;
     }
 
-    public async Task<ResponseModel> ArtistTracksAsync(
-        ContextModel context,
+    public async Task<ResponseModel> ArtistTracksAsync(ContextModel context,
         TimeSettingsModel timeSettings,
         UserSettingsModel userSettings,
-        string searchValue)
+        string searchValue,
+        bool redirectsEnabled)
     {
         var response = new ResponseModel
         {
@@ -359,7 +363,7 @@ public class ArtistBuilders
         };
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, searchValue, context.ContextUser.UserNameLastFM,
-            context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm, true, userSettings.UserId);
+            context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm, true, userSettings.UserId, redirectsEnabled: redirectsEnabled);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
@@ -399,7 +403,9 @@ public class ArtistBuilders
             return response;
         }
 
-        var url = $"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library/music/{UrlEncoder.Default.Encode(artistSearch.Artist.ArtistName)}";
+        var url = LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm,
+            $"/library/music/{UrlEncoder.Default.Encode(artistSearch.Artist.ArtistName)}");
+
         if (Uri.IsWellFormedUriString(url, UriKind.Absolute))
         {
             response.EmbedAuthor.WithUrl(url);
@@ -414,7 +420,7 @@ public class ArtistBuilders
             var albumPageString = new StringBuilder();
             foreach (var track in topTrackPage)
             {
-                albumPageString.AppendLine($"{counter}. **{StringExtensions.Sanitize(track.Name)}** ({track.Playcount} {StringExtensions.GetPlaysString(track.Playcount)})");
+                albumPageString.AppendLine($"{counter}. **{StringExtensions.Sanitize(track.Name)}** - *{track.Playcount} {StringExtensions.GetPlaysString(track.Playcount)}*");
                 counter++;
             }
 
@@ -513,8 +519,8 @@ public class ArtistBuilders
             foreach (var track in page)
             {
                 var name = guildListSettings.OrderType == OrderType.Listeners
-                    ? $"`{track.ListenerCount}` · **{track.ArtistName}** ({track.TotalPlaycount} {StringExtensions.GetPlaysString(track.TotalPlaycount)})"
-                    : $"`{track.TotalPlaycount}` · **{track.ArtistName}** ({track.ListenerCount} {StringExtensions.GetListenersString(track.ListenerCount)})";
+                    ? $"`{track.ListenerCount}` · **{track.ArtistName}** · *{track.TotalPlaycount} {StringExtensions.GetPlaysString(track.TotalPlaycount)}*"
+                    : $"`{track.TotalPlaycount}` · **{track.ArtistName}** · *{track.ListenerCount} {StringExtensions.GetListenersString(track.ListenerCount)}*";
 
                 if (previousTopGuildArtists != null && previousTopGuildArtists.Any())
                 {
@@ -576,32 +582,34 @@ public class ArtistBuilders
                 $"{userSettings.UserNameLastFm}, requested by {await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser)}";
         }
 
-        var userUrl =
-            $"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library/artists?{timeSettings.UrlParameter}";
+        var userUrl = LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm,
+            $"/library/artists?{timeSettings.UrlParameter}");
 
         response.EmbedAuthor.WithName($"Top {timeSettings.Description.ToLower()} artists for {userTitle}");
         response.EmbedAuthor.WithUrl(userUrl);
 
-        var artists = await this._lastFmRepository.GetTopArtistsAsync(userSettings.UserNameLastFm,
+        var artists = await this._dataSourceFactory.GetTopArtistsAsync(userSettings.UserNameLastFm,
             timeSettings, 200, 1);
 
         if (!artists.Success || artists.Content == null)
         {
             response.Embed.ErrorResponse(artists.Error, artists.Message, "top artists", context.DiscordUser);
             response.CommandResponse = CommandResponse.LastFmError;
+            response.ResponseType = ResponseType.Embed;
             return response;
         }
         if (artists.Content.TopArtists == null || !artists.Content.TopArtists.Any())
         {
             response.Embed.WithDescription($"Sorry, you or the user you're searching for don't have any top artists in the [selected time period]({userUrl}).");
             response.CommandResponse = CommandResponse.NoScrobbles;
+            response.ResponseType = ResponseType.Embed;
             return response;
         }
 
         var previousTopArtists = new List<TopArtist>();
         if (topListSettings.Billboard && timeSettings.BillboardStartDateTime.HasValue && timeSettings.BillboardEndDateTime.HasValue)
         {
-            var previousArtistsCall = await this._lastFmRepository
+            var previousArtistsCall = await this._dataSourceFactory
                 .GetTopArtistsForCustomTimePeriodAsync(userSettings.UserNameLastFm, timeSettings.BillboardStartDateTime.Value, timeSettings.BillboardEndDateTime.Value, 200);
 
             if (previousArtistsCall.Success)
@@ -623,7 +631,7 @@ public class ArtistBuilders
             foreach (var artist in artistPage)
             {
                 var name =
-                    $"**[{artist.ArtistName}]({artist.ArtistUrl})** ({artist.UserPlaycount} {StringExtensions.GetPlaysString(artist.UserPlaycount)})";
+                    $"**[{artist.ArtistName}]({artist.ArtistUrl})** - *{artist.UserPlaycount} {StringExtensions.GetPlaysString(artist.UserPlaycount)}*";
 
                 if (topListSettings.Billboard && previousTopArtists.Any())
                 {
@@ -672,12 +680,11 @@ public class ArtistBuilders
         return response;
     }
 
-    public async Task<ResponseModel> ArtistPaceAsync(
-        ContextModel context,
+    public async Task<ResponseModel> ArtistPaceAsync(ContextModel context,
         UserSettingsModel userSettings,
         TimeSettingsModel timeSettings,
         string amount,
-        string artistName)
+        string artistName, bool redirectsEnabled)
     {
         var response = new ResponseModel
         {
@@ -695,7 +702,9 @@ public class ArtistBuilders
                 .TrimStart();
         }
 
-        var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistName, context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm, userId: context.ContextUser.UserId);
+        var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistName,
+            context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm,
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
@@ -703,7 +712,7 @@ public class ArtistBuilders
 
         goalAmount = SettingService.GetGoalAmount(amount, artistSearch.Artist.UserPlaycount.GetValueOrDefault(0));
 
-        var regularPlayCount = await this._lastFmRepository.GetScrobbleCountFromDateAsync(userSettings.UserNameLastFm, timeSettings.TimeFrom, userSettings.SessionKeyLastFm);
+        var regularPlayCount = await this._dataSourceFactory.GetScrobbleCountFromDateAsync(userSettings.UserNameLastFm, timeSettings.TimeFrom, userSettings.SessionKeyLastFm);
 
         if (regularPlayCount is null or 0)
         {
@@ -759,7 +768,8 @@ public class ArtistBuilders
         WhoKnowsMode mode,
         string artistValues,
         bool displayRoleSelector = false,
-        List<ulong> roles = null)
+        List<ulong> roles = null,
+        bool redirectsEnabled = true)
     {
         var response = new ResponseModel
         {
@@ -768,13 +778,13 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistValues,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, useCachedArtists: true,
-            userId: context.ContextUser.UserId);
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName);
+        var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, redirectsEnabled);
 
         var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel, cachedArtist.Name);
         var imgUrl = cachedArtist.SpotifyImageUrl;
@@ -798,7 +808,7 @@ public class ArtistBuilders
         var (filterStats, filteredUsersWithArtist) = WhoKnowsService.FilterWhoKnowsObjectsAsync(usersWithArtist, contextGuild, roles);
 
         CrownModel crownModel = null;
-        if (contextGuild.CrownsDisabled != true && filteredUsersWithArtist.Count >= 1 && !displayRoleSelector)
+        if (contextGuild.CrownsDisabled != true && filteredUsersWithArtist.Count >= 1 && !displayRoleSelector && redirectsEnabled)
         {
             crownModel =
                 await this._crownService.GetAndUpdateCrownForArtist(filteredUsersWithArtist, contextGuild, artistSearch.Artist.ArtistName);
@@ -939,13 +949,15 @@ public class ArtistBuilders
             ResponseType = ResponseType.Embed,
         };
 
-        var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, settings.NewSearchValue, context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, useCachedArtists: true, userId: context.ContextUser.UserId);
+        var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser,
+            settings.NewSearchValue, context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm,
+            useCachedArtists: true, userId: context.ContextUser.UserId, redirectsEnabled: settings.RedirectsEnabled);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName);
+        var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, settings.RedirectsEnabled);
 
         var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel, cachedArtist.Name);
         var imgUrl = cachedArtist.SpotifyImageUrl;
@@ -1042,7 +1054,7 @@ public class ArtistBuilders
         }
         if (context.ContextUser.PrivacyLevel != PrivacyLevel.Global)
         {
-            footer.AppendLine($"You are currently not globally visible - use '{context.Prefix}privacy global' to enable.");
+            footer.AppendLine($"You are currently not globally visible - use '{context.Prefix}privacy' to enable.");
         }
 
         if (settings.HidePrivateUsers)
@@ -1068,10 +1080,9 @@ public class ArtistBuilders
         return response;
     }
 
-    public async Task<ResponseModel> FriendsWhoKnowArtistAsync(
-        ContextModel context,
+    public async Task<ResponseModel> FriendsWhoKnowArtistAsync(ContextModel context,
         WhoKnowsMode mode,
-        string artistValues)
+        string artistValues, bool redirectsEnabled)
     {
         var response = new ResponseModel
         {
@@ -1090,14 +1101,14 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistValues,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, useCachedArtists: true,
-            userId: context.ContextUser.UserId);
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
         var cachedArtist =
-            await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName);
+            await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, redirectsEnabled);
 
         var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel, cachedArtist.Name);
         var imgUrl = cachedArtist.SpotifyImageUrl;
@@ -1228,8 +1239,8 @@ public class ArtistBuilders
             return response;
         }
 
-        var ownArtistsTask = this._lastFmRepository.GetTopArtistsAsync(ownLastFmUsername, timeSettings, 1000);
-        var otherArtistsTask = this._lastFmRepository.GetTopArtistsAsync(lastfmToCompare, timeSettings, 1000);
+        var ownArtistsTask = this._dataSourceFactory.GetTopArtistsAsync(ownLastFmUsername, timeSettings, 1000);
+        var otherArtistsTask = this._dataSourceFactory.GetTopArtistsAsync(lastfmToCompare, timeSettings, 1000);
 
         var ownArtists = await ownArtistsTask;
         var otherArtists = await otherArtistsTask;
@@ -1260,9 +1271,10 @@ public class ArtistBuilders
 
         var amount = tasteSettings.ExtraLarge ? 28 : 14;
         var pages = new List<PageBuilder>();
-        var url = $"{Constants.LastFMUserUrl}{lastfmToCompare}/library/artists?{timeSettings.UrlParameter}";
 
-        var ownName = context.DiscordUser.Username;
+        var url = LastfmUrlExtensions.GetUserUrl(lastfmToCompare, $"/library/artists?{timeSettings.UrlParameter}");
+
+        var ownName = context.DiscordUser.GlobalName ?? context.DiscordUser.Username;
         var otherName = userSettings.DisplayName;
 
         if (context.DiscordGuild != null)
@@ -1437,6 +1449,15 @@ public class ArtistBuilders
 
         concurrentNeighbors.TryGetValue(userSettings.UserId, out var self);
 
+        if (self == null)
+        {
+            response.Embed.WithDescription(
+                "Sorry, you are not added to this server yet. Run `/refreshmembers` and try again.");
+            response.ResponseType = ResponseType.Embed;
+            response.CommandResponse = CommandResponse.NotFound;
+            return response;
+        }
+
         var neighbors = concurrentNeighbors
             .Where(w => filteredUserIds.Contains(w.Key))
             .ToDictionary(d => d.Key, d => d.Value);
@@ -1463,7 +1484,7 @@ public class ArtistBuilders
                 guildUsers.TryGetValue(neighbor.Key, out var guildUser);
                 pageString.AppendLine(
                     $"**{(neighbor.Value.TotalPoints / self.TotalPoints).ToString("P1", numberInfo)}** — " +
-                    $"**[{StringExtensions.Sanitize(guildUser?.UserName)}]({Constants.LastFMUserUrl}{guildUser?.UserNameLastFM})** — " +
+                    $"**[{StringExtensions.Sanitize(guildUser?.UserName)}]({LastfmUrlExtensions.GetUserUrl(guildUser?.UserNameLastFM)})** — " +
                                       $"`{(neighbor.Value.ArtistPoints / self.ArtistPoints).ToString("P0", numberInfo)}` artists, " +
                                       $"`{(neighbor.Value.GenrePoints / self.GenrePoints).ToString("P0", numberInfo)}` genres, " +
                                       $"`{(neighbor.Value.CountryPoints / self.CountryPoints).ToString("P0", numberInfo)}` countries");

@@ -7,12 +7,14 @@ using System.Threading.Tasks;
 using Dapper;
 using Discord;
 using FMBot.Bot.Extensions;
+using FMBot.Bot.Interfaces;
 using FMBot.Bot.Models;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Enums;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Domain.Enums;
-using FMBot.LastFM.Domain.Types;
+using FMBot.Domain.Types;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
@@ -31,32 +33,32 @@ public class ArtistsService
     private readonly IMemoryCache _cache;
     private readonly BotSettings _botSettings;
     private readonly ArtistRepository _artistRepository;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly WhoKnowsArtistService _whoKnowsArtistService;
     private readonly TimerService _timer;
-    private readonly UpdateRepository _updateRepository;
+    private readonly IUpdateService _updateService;
 
     public ArtistsService(IDbContextFactory<FMBotDbContext> contextFactory,
         IMemoryCache cache,
         IOptions<BotSettings> botSettings,
         ArtistRepository artistRepository,
-        LastFmRepository lastFmRepository,
+        IDataSourceFactory dataSourceFactory,
         WhoKnowsArtistService whoKnowsArtistService,
         TimerService timer,
-        UpdateRepository updateRepository)
+        IUpdateService updateService)
     {
         this._contextFactory = contextFactory;
         this._cache = cache;
         this._artistRepository = artistRepository;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._whoKnowsArtistService = whoKnowsArtistService;
         this._timer = timer;
-        this._updateRepository = updateRepository;
+        this._updateService = updateService;
         this._botSettings = botSettings.Value;
     }
 
     public async Task<ArtistSearch> SearchArtist(ResponseModel response, IUser discordUser, string artistValues, string lastFmUserName, string sessionKey = null, string otherUserUsername = null,
-        bool useCachedArtists = false, int? userId = null)
+        bool useCachedArtists = false, int? userId = null, bool redirectsEnabled = true)
     {
         if (!string.IsNullOrWhiteSpace(artistValues) && artistValues.Length != 0)
         {
@@ -90,11 +92,11 @@ public class ArtistsService
             Response<ArtistInfo> artistCall;
             if (useCachedArtists)
             {
-                artistCall = await GetCachedArtist(artistValues, lastFmUserName, userId);
+                artistCall = await GetCachedArtist(artistValues, lastFmUserName, userId, redirectsEnabled);
             }
             else
             {
-                artistCall = await this._lastFmRepository.GetArtistInfoAsync(artistValues, lastFmUserName);
+                artistCall = await this._dataSourceFactory.GetArtistInfoAsync(artistValues, lastFmUserName, redirectsEnabled);
             }
 
             if (!artistCall.Success && artistCall.Error == ResponseStatus.MissingParameters)
@@ -120,11 +122,11 @@ public class ArtistsService
 
             if (userId.HasValue && otherUserUsername == null)
             {
-                recentScrobbles = await this._updateRepository.UpdateUser(new UpdateUserQueueItem(userId.Value, getAccurateTotalPlaycount: false));
+                recentScrobbles = await this._updateService.UpdateUser(new UpdateUserQueueItem(userId.Value, getAccurateTotalPlaycount: false));
             }
             else
             {
-                recentScrobbles = await this._lastFmRepository.GetRecentTracksAsync(lastFmUserName, 1, true, sessionKey);
+                recentScrobbles = await this._dataSourceFactory.GetRecentTracksAsync(lastFmUserName, 1, true, sessionKey);
             }
 
             if (GenericEmbedService.RecentScrobbleCallFailed(recentScrobbles))
@@ -143,11 +145,11 @@ public class ArtistsService
             Response<ArtistInfo> artistCall;
             if (useCachedArtists)
             {
-                artistCall = await GetCachedArtist(lastPlayedTrack.ArtistName, lastFmUserName, userId);
+                artistCall = await GetCachedArtist(lastPlayedTrack.ArtistName, lastFmUserName, userId, redirectsEnabled);
             }
             else
             {
-                artistCall = await this._lastFmRepository.GetArtistInfoAsync(lastPlayedTrack.ArtistName, lastFmUserName);
+                artistCall = await this._dataSourceFactory.GetArtistInfoAsync(lastPlayedTrack.ArtistName, lastFmUserName, redirectsEnabled);
             }
 
             if (artistCall.Content == null || !artistCall.Success)
@@ -162,10 +164,10 @@ public class ArtistsService
         }
     }
 
-    private async Task<Response<ArtistInfo>> GetCachedArtist(string artistName, string lastFmUserName, int? userId = null)
+    private async Task<Response<ArtistInfo>> GetCachedArtist(string artistName, string lastFmUserName, int? userId = null, bool redirectsEnabled = true)
     {
         Response<ArtistInfo> artistInfo;
-        var cachedArtist = await GetArtistFromDatabase(artistName);
+        var cachedArtist = await GetArtistFromDatabase(artistName, redirectsEnabled);
         if (cachedArtist != null)
         {
             artistInfo = new Response<ArtistInfo>
@@ -182,7 +184,7 @@ public class ArtistsService
         }
         else
         {
-            artistInfo = await this._lastFmRepository.GetArtistInfoAsync(artistName, lastFmUserName);
+            artistInfo = await this._dataSourceFactory.GetArtistInfoAsync(artistName, lastFmUserName, redirectsEnabled);
         }
 
         return artistInfo;
@@ -209,8 +211,7 @@ public class ArtistsService
 
         foreach (var topArtist in topArtists.Where(w => w.ArtistImageUrl == null))
         {
-            var url = topArtist.ArtistUrl.ToLower();
-            var artistImage = (string)this._cache.Get(CacheKeyForArtist(url));
+            var artistImage = (string)this._cache.Get(CacheKeyForArtist(topArtist.ArtistName));
 
             if (artistImage != null)
             {
@@ -231,7 +232,7 @@ public class ArtistsService
             return;
         }
 
-        const string sql = "SELECT LOWER(last_fm_url) as last_fm_url, LOWER(spotify_image_url) as spotify_image_url " +
+        const string sql = "SELECT LOWER(spotify_image_url) as spotify_image_url, LOWER(name) as artist_name " +
                            "FROM public.artists where last_fm_url is not null and spotify_image_url is not null;";
 
         DefaultTypeMap.MatchNamesWithUnderscores = true;
@@ -242,15 +243,15 @@ public class ArtistsService
 
         foreach (var artistCover in artistCovers)
         {
-            this._cache.Set(CacheKeyForArtist(artistCover.LastFmUrl), artistCover.SpotifyImageUrl, cacheTime);
+            this._cache.Set(CacheKeyForArtist(artistCover.ArtistName), artistCover.SpotifyImageUrl, cacheTime);
         }
 
         this._cache.Set(cacheKey, true, cacheTime);
     }
 
-    public static string CacheKeyForArtist(string lastFmUrl)
+    public static string CacheKeyForArtist(string artistName)
     {
-        return $"artist-spotify-image-{lastFmUrl.ToLower()}";
+        return $"artist-spotify-image-{artistName.ToLower()}";
     }
 
     // Top artists for 2 users
@@ -319,7 +320,7 @@ public class ArtistsService
             return topArtists;
         }
 
-        var freshTopArtists = (await this._artistRepository.GetUserArtists(userId, connection))
+        var freshTopArtists = (await ArtistRepository.GetUserArtists(userId, connection))
             .Select(s => new TopArtist
             {
                 ArtistName = s.Name,
@@ -399,7 +400,17 @@ public class ArtistsService
 
     private static string Description(IEnumerable<TasteItem> mainUserArtists, TimePeriod chartTimePeriod, IReadOnlyCollection<TasteItem> matchedArtists)
     {
-        var percentage = ((decimal)matchedArtists.Count / (decimal)mainUserArtists.Count()) * 100;
+        decimal percentage;
+
+        if (!mainUserArtists.Any() || !matchedArtists.Any())
+        {
+            percentage = 0;
+        }
+        else
+        {
+            percentage = ((decimal)matchedArtists.Count / (decimal)mainUserArtists.Count()) * 100;
+        }
+
         var description =
             $"**{matchedArtists.Count()}** ({percentage:0.0}%)  out of top **{mainUserArtists.Count()}** {chartTimePeriod.ToString().ToLower()} match";
 
@@ -464,19 +475,27 @@ public class ArtistsService
         return await db.Artists.FindAsync(artistId);
     }
 
-    public async Task<Artist> GetArtistFromDatabase(string artistName)
+    public async Task<Artist> GetArtistFromDatabase(string artistName ,bool redirectsEnabled = true)
     {
         if (string.IsNullOrWhiteSpace(artistName))
         {
             return null;
         }
 
-        var correctedArtistName = await GetCorrectedArtistName(artistName);
+        string correctArtistName;
+        if (redirectsEnabled)
+        {
+            correctArtistName = await GetCorrectedArtistName(artistName);
+        }
+        else
+        {
+            correctArtistName = artistName;
+        }
 
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var artist = await this._artistRepository.GetArtistForName(correctedArtistName, connection, true);
+        var artist = await this._artistRepository.GetArtistForName(correctArtistName, connection, true);
 
         await connection.CloseAsync();
 

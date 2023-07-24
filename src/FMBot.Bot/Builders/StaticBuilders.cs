@@ -10,6 +10,7 @@ using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
 using FMBot.Domain.Models;
 
 namespace FMBot.Bot.Builders;
@@ -17,10 +18,12 @@ namespace FMBot.Bot.Builders;
 public class StaticBuilders
 {
     private readonly SupporterService _supporterService;
+    private readonly UserService _userService;
 
-    public StaticBuilders(SupporterService supporterService)
+    public StaticBuilders(SupporterService supporterService, UserService userService)
     {
         this._supporterService = supporterService;
+        this._userService = userService;
     }
 
     public static ResponseModel OutOfSync(
@@ -58,7 +61,7 @@ public class StaticBuilders
         response.Components = new ComponentBuilder()
             .WithButton("Last.fm settings", style: ButtonStyle.Link, url: "https://www.last.fm/settings/applications")
             .WithButton("Full guide", style: ButtonStyle.Link, url: "https://support.last.fm/t/spotify-has-stopped-scrobbling-what-can-i-do/3184")
-            .WithButton("Your profile", style: ButtonStyle.Link, url: $"{Constants.LastFMUserUrl}{context.ContextUser.UserNameLastFM}");
+            .WithButton("Your profile", style: ButtonStyle.Link, url: $"{LastfmUrlExtensions.GetUserUrl(context.ContextUser.UserNameLastFM)}");
 
         return response;
     }
@@ -281,6 +284,82 @@ public class StaticBuilders
                             $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Yearly && c.LastPayment >= DateTime.Now.AddDays(-370))} active yearly ({supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Yearly)} total)\n" +
                             $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Lifetime)} lifetime")
                 .WithTitle(".fmbot opencollective supporters overview"));
+        }
+
+        if (!pages.Any())
+        {
+            pages.Add(new PageBuilder()
+                .WithDescription("No pages, most likely an error while fetching supporters"));
+        }
+
+        response.StaticPaginator = StringService.BuildStaticPaginator(pages);
+
+        return response;
+    }
+
+    public async Task<ResponseModel> DiscordSupportersAsync(
+        ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Paginator,
+        };
+
+        var existingSupporters = await this._supporterService.GetAllSupporters();
+
+        var supporters = await this._supporterService.GetDiscordEntitlements();
+
+        var supporterLists = supporters.OrderByDescending(o => o.StartsAt).Chunk(10);
+
+        var description = new StringBuilder();
+
+        var pages = new List<PageBuilder>();
+        foreach (var supporterList in supporterLists)
+        {
+            var supporterString = new StringBuilder();
+            supporterString.Append(description.ToString());
+
+            foreach (var supporter in supporterList)
+            {
+                supporterString.Append($"**{supporter.DiscordUserId}** - <@{supporter.DiscordUserId}>");
+
+                var user = await this._userService.GetUserAsync(supporter.DiscordUserId);
+                if (user != null)
+                {
+                    supporterString.Append($" - [{user.UserNameLastFM}]({Constants.LastFMUserUrl}{user.UserNameLastFM})");
+                }
+                else
+                {
+                    supporterString.Append($" - No .fmbot user :(");
+                }
+
+                supporterString.AppendLine();
+
+                if (supporter.StartsAt.HasValue && supporter.EndsAt.HasValue)
+                {
+                    var startsAt = DateTime.SpecifyKind(supporter.StartsAt.Value, DateTimeKind.Utc);
+                    var startsAtValue = ((DateTimeOffset)startsAt).ToUnixTimeSeconds();
+
+                    var endsAt = DateTime.SpecifyKind(supporter.EndsAt.Value, DateTimeKind.Utc);
+                    var endsAtValue = ((DateTimeOffset)endsAt).ToUnixTimeSeconds();
+
+                    supporterString.AppendLine($"Started <t:{startsAtValue}:f> - Ends on <t:{endsAtValue}:D>");
+                }
+                else
+                {
+                    supporterString.AppendLine($"No start or end date (unlimited test entitlement)");
+                }
+
+                supporterString.AppendLine();
+            }
+
+            pages.Add(new PageBuilder()
+                .WithDescription(supporterString.ToString())
+                .WithColor(DiscordConstants.InformationColorBlue)
+                .WithAuthor(response.EmbedAuthor)
+                .WithFooter($"Discord total: {supporters.Count} - db total: {existingSupporters.Count(c => c.SubscriptionType == SubscriptionType.Discord)}\n" +
+                            $"Discord active: {supporters.Count(c => c.Active)} - db active {existingSupporters.Count(c => c.SubscriptionType == SubscriptionType.Discord && c.Expired != true)}")
+                .WithTitle(".fmbot Discord supporters overview"));
         }
 
         if (!pages.Any())

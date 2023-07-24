@@ -179,8 +179,6 @@ public class CommandHandler
             return;
         }
 
-        var userBlocked = await this._userService.UserBlockedAsync(context.User.Id);
-
         // If command possibly equals .fm
         if ((searchResult.Commands == null || searchResult.Commands.Count == 0) && msg.Content.StartsWith(this._botSettings.Bot.Prefix))
         {
@@ -191,7 +189,7 @@ public class CommandHandler
                 return;
             }
 
-            if (userBlocked)
+            if (await this._userService.UserBlockedAsync(context.User.Id))
             {
                 await UserBlockedResponse(context, prfx);
                 return;
@@ -221,7 +219,7 @@ public class CommandHandler
             return;
         }
 
-        if (userBlocked)
+        if (await this._userService.UserBlockedAsync(context.User.Id))
         {
             await UserBlockedResponse(context, prfx);
             return;
@@ -229,14 +227,14 @@ public class CommandHandler
 
         if (searchResult.Commands[0].Command.Attributes.OfType<UsernameSetRequired>().Any())
         {
-            var userRegistered = await this._userService.UserRegisteredAsync(context.User);
-            if (!userRegistered)
+            var userIsRegistered = await this._userService.UserRegisteredAsync(context.User);
+            if (!userIsRegistered)
             {
                 var embed = new EmbedBuilder()
                     .WithColor(DiscordConstants.LastFmColorRed);
-                var userNickname = (context.User as SocketGuildUser)?.Nickname;
+                var userNickname = (context.User as SocketGuildUser)?.DisplayName;
 
-                embed.UsernameNotSetErrorResponse(prfx ?? this._botSettings.Bot.Prefix, userNickname ?? context.User.Username);
+                embed.UsernameNotSetErrorResponse(prfx ?? this._botSettings.Bot.Prefix, userNickname ?? context.User.GlobalName ?? context.User.Username);
                 await context.Channel.SendMessageAsync("", false, embed.Build());
                 context.LogCommandUsed(CommandResponse.UsernameNotSet);
                 return;
@@ -303,7 +301,7 @@ public class CommandHandler
         if (msg.Content.ToLower().EndsWith(" help") && commandName != "help")
         {
             var embed = new EmbedBuilder();
-            var userName = (context.Message.Author as SocketGuildUser)?.Nickname ?? context.User.Username;
+            var userName = (context.Message.Author as SocketGuildUser)?.DisplayName ?? context.User.GlobalName ?? context.User.Username;
 
             embed.HelpResponse(searchResult.Commands[0].Command, prfx, userName);
             await context.Channel.SendMessageAsync("", false, embed.Build());
@@ -320,7 +318,7 @@ public class CommandHandler
         }
         else
         {
-            Log.Error(result.ToString(), context.Message.Content);
+            Log.Error(result?.ToString() ?? "Command error (null)", context.Message.Content);
         }
     }
 

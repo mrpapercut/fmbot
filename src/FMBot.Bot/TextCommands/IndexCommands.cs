@@ -13,6 +13,7 @@ using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
 using FMBot.Domain.Models;
 using Microsoft.Extensions.Options;
 using Serilog;
@@ -237,10 +238,19 @@ public class IndexCommands : BaseCommandModule
                 await this._supporterService.GetPromotionalUpdateMessage(contextUser, prfx, this.Context.Client, this.Context.Guild?.Id);
             await message.ModifyAsync(m =>
             {
+                if (GenericEmbedService.RecentScrobbleCallFailed(update))
+                {
+                    m.Embed = GenericEmbedService.RecentScrobbleCallFailedBuilder(update, contextUser.UserNameLastFM).Build();
+
+                    this.Context.LogCommandWithLastFmError(update.Error);
+
+                    return;
+                }
+
                 if (update.Content.NewRecentTracksAmount == 0 && update.Content.RemovedRecentTracksAmount == 0)
                 {
                     var updateDescription = new StringBuilder();
-                    updateDescription.AppendLine($"No new scrobbles found on [your Last.fm profile]({Constants.LastFMUserUrl}{contextUser.UserNameLastFM}) since last update. ");
+                    updateDescription.AppendLine($"No new scrobbles found on [your Last.fm profile]({LastfmUrlExtensions.GetUserUrl(contextUser.UserNameLastFM)}) since last update. ");
                     updateDescription.AppendLine();
 
                     if (contextUser.LastUpdated.HasValue)

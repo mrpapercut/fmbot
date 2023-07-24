@@ -17,12 +17,11 @@ namespace FMBot.Persistence.EntityFrameWork.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "7.0.7")
+                .HasAnnotation("ProductVersion", "7.0.8")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "citext");
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "pg_trgm");
-            NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "timescaledb");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
             modelBuilder.Entity("FMBot.Persistence.Domain.Models.AiGeneration", b =>
@@ -1533,6 +1532,14 @@ namespace FMBot.Persistence.EntityFrameWork.Migrations
                         .HasColumnType("citext")
                         .HasColumnName("artist_name");
 
+                    b.Property<long?>("MsPlayed")
+                        .HasColumnType("bigint")
+                        .HasColumnName("ms_played");
+
+                    b.Property<int?>("PlaySource")
+                        .HasColumnType("integer")
+                        .HasColumnName("play_source");
+
                     b.Property<DateTime>("TimePlayed")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("time_played");
@@ -1552,34 +1559,6 @@ namespace FMBot.Persistence.EntityFrameWork.Migrations
                         .HasDatabaseName("ix_user_plays_user_id");
 
                     b.ToTable("user_plays", (string)null);
-                });
-
-            modelBuilder.Entity("FMBot.Persistence.Domain.Models.UserPlayTs", b =>
-                {
-                    b.Property<string>("AlbumName")
-                        .HasColumnType("citext")
-                        .HasColumnName("album_name");
-
-                    b.Property<string>("ArtistName")
-                        .HasColumnType("citext")
-                        .HasColumnName("artist_name");
-
-                    b.Property<DateTime>("TimePlayed")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("time_played");
-
-                    b.Property<string>("TrackName")
-                        .HasColumnType("citext")
-                        .HasColumnName("track_name");
-
-                    b.Property<int>("UserId")
-                        .HasColumnType("integer")
-                        .HasColumnName("user_id");
-
-                    b.HasIndex("UserId")
-                        .HasDatabaseName("ix_user_play_ts_user_id");
-
-                    b.ToTable("user_play_ts", (string)null);
                 });
 
             modelBuilder.Entity("FMBot.Persistence.Domain.Models.UserStreak", b =>

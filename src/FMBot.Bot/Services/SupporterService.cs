@@ -11,6 +11,7 @@ using FMBot.Bot.Extensions;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Resources;
 using FMBot.Domain;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
@@ -57,7 +58,7 @@ public class SupporterService
             return null;
         }
 
-        if (userUserType == UserType.Supporter)
+        if (userUserType != UserType.User)
         {
             return null;
         }
@@ -67,24 +68,18 @@ public class SupporterService
             return null;
         }
 
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        var guildSettings = await db.Guilds
-            .AsQueryable()
-            .FirstOrDefaultAsync(f => f.DiscordGuildId == guild.Id);
-
-        if (guildSettings is { DisableSupporterMessages: true })
-        {
-            return null;
-        }
-
         var rnd = new Random();
         var randomHintNumber = rnd.Next(0, Constants.SupporterMessageChance);
 
         if (randomHintNumber == 1)
         {
+            await using var db = await this._contextFactory.CreateDbContextAsync();
             var supporters = db.Supporters
                 .AsQueryable()
-                .Where(w => w.SupporterMessagesEnabled)
+                .Where(w => w.SupporterMessagesEnabled &&
+                            w.Name != null &&
+                            w.Name != "Incognito" &&
+                            w.Name != "Guest")
                 .ToList();
 
             if (!supporters.Any())
@@ -123,7 +118,7 @@ public class SupporterService
 
     public static string GetSupporterLink()
     {
-        var pick = RandomNumberGenerator.GetInt32(0, 1);
+        var pick = RandomNumberGenerator.GetInt32(0, 2);
 
         return pick switch
         {
@@ -229,20 +224,20 @@ public class SupporterService
             return null;
         }
 
-        var randomHintNumber = new Random().Next(0, 22);
+        var randomHintNumber = new Random().Next(0, 30);
 
         switch (randomHintNumber)
         {
             case 1:
                 SetGuildPromoCache(guildId);
-                return
+                return  
                     $"*.fmbot stores all artists/albums/tracks instead of just the top 4/5/6k for supporters. " +
-                    $"[See all the benefits of becoming a supporter here.]({Constants.GetSupporterOverviewLink})*";
-            case 2:
+                    $"[See all the benefits of becoming a supporter here.]({GetSupporterLink()})*";
+            case 2: 
                 SetGuildPromoCache(guildId);
                 return
                     $"*Supporters get extra statistics like first listen dates, full history in `stats`, artist discoveries in `year`, extra options in their `fm` footer and more. " +
-                    $"[See all the perks of getting supporter here.]({Constants.GetSupporterOverviewLink})*";
+                    $"[See all the perks of getting supporter here.]({GetSupporterLink()})*";
             case 3:
                 {
                     await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -268,7 +263,21 @@ public class SupporterService
                     SetGuildPromoCache(guildId);
                     return
                         $"*Want more custom options in your `{prfx}fm` footer? Supporters can set up to 8 + 1 options. " +
-                        $"[Get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*";
+                        $"[Get .fmbot supporter here.]({GetSupporterLink()})*";
+                }
+            case 5:
+                {
+                    SetGuildPromoCache(guildId);
+                    return
+                        $"*Supporters get an improved GPT-4 powered `{prfx}judge` command. They also get higher usage limits and the ability to use the command on others. " +
+                        $"[Get .fmbot supporter here.]({GetSupporterLink()})*";
+                }
+            case 6:
+                {
+                    SetGuildPromoCache(guildId);
+                    return
+                        $"*Supporters can now import their full Spotify history into the bot. " +
+                        $"[Get .fmbot supporter here.]({GetSupporterLink()})*";
                 }
             default:
                 return null;
@@ -381,6 +390,13 @@ public class SupporterService
             if (user != null)
             {
                 user.UserType = UserType.User;
+
+                if (user.DataSource != DataSource.LastFm)
+                {
+                    user.DataSource = DataSource.LastFm;
+                    _ = this._indexService.RecalculateTopLists(user);
+                }
+
                 db.Update(user);
 
                 Log.Information("Removed supporter status from Discord account {discordUserId} - {lastFmUsername}", user.DiscordUserId, user.UserNameLastFM);
@@ -636,6 +652,11 @@ public class SupporterService
                $"Notes: `{supporter.Notes}`";
     }
 
+    public async Task<List<DiscordEntitlement>> GetDiscordEntitlements()
+    {
+        return await this._discordSkuService.GetEntitlements();
+    }
+
     public async Task UpdateDiscordSupporters()
     {
         var discordSupporters = await this._discordSkuService.GetEntitlements();
@@ -648,7 +669,9 @@ public class SupporterService
             .ToListAsync();
 
         var discordUsersLeft = existingSupporters
+            .OrderByDescending(o => o.LastPayment)
             .Select(s => s.DiscordUserId.Value)
+            .Distinct()
             .ToHashSet();
 
         foreach (var discordSupporter in discordSupporters)
@@ -756,7 +779,7 @@ public class SupporterService
         }
     }
 
-    private async Task ModifyGuildRole(ulong discordUserId, bool add = true)
+    public async Task ModifyGuildRole(ulong discordUserId, bool add = true)
     {
         var baseGuild = await this._client.Rest.GetGuildAsync(this._botSettings.Bot.BaseServerId);
 
@@ -771,11 +794,17 @@ public class SupporterService
 
                     if (add)
                     {
-                        await guildUser.AddRoleAsync(role);
+                        await guildUser.AddRoleAsync(role, new RequestOptions
+                        {
+                            AuditLogReason = "Automated supporter integration"
+                        });
                     }
                     else
                     {
-                        await guildUser.RemoveRoleAsync(role);
+                        await guildUser.RemoveRoleAsync(role, new RequestOptions
+                        {
+                            AuditLogReason = "Automated supporter integration"
+                        });
                     }
 
                     Log.Information("Modifying supporter role succeeded for {id}", discordUserId);
@@ -879,6 +908,12 @@ public class SupporterService
             if (user.UserType == UserType.Supporter)
             {
                 user.UserType = UserType.User;
+            }
+
+            if (user.DataSource != DataSource.LastFm)
+            {
+                user.DataSource = DataSource.LastFm;
+                _ = this._indexService.RecalculateTopLists(user);
             }
 
             db.Update(user);

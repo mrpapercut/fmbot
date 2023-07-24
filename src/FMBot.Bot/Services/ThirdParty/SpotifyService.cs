@@ -68,7 +68,7 @@ public class SpotifyService
         return await spotify.Search.Item(searchRequest);
     }
 
-    public async Task<Artist> GetOrStoreArtistAsync(ArtistInfo artistInfo, string artistNameBeforeCorrect = null)
+    public async Task<Artist> GetOrStoreArtistAsync(ArtistInfo artistInfo, string artistNameBeforeCorrect = null, bool redirectsEnabled = true)
     {
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
@@ -110,7 +110,7 @@ public class SpotifyService
 
                         if (artistInfo.ArtistUrl != null)
                         {
-                            this._cache.Set(ArtistsService.CacheKeyForArtist(artistInfo.ArtistUrl), artistToAdd.SpotifyImageUrl, TimeSpan.FromMinutes(5));
+                            this._cache.Set(ArtistsService.CacheKeyForArtist(artistInfo.ArtistName), artistToAdd.SpotifyImageUrl, TimeSpan.FromMinutes(5));
                         }
                     }
 
@@ -146,7 +146,7 @@ public class SpotifyService
                     }).ToList();
                 }
 
-                if (artistNameBeforeCorrect != null && !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.CurrentCultureIgnoreCase))
+                if (redirectsEnabled && artistNameBeforeCorrect != null && !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.CurrentCultureIgnoreCase))
                 {
                     await this._artistRepository
                         .AddOrUpdateArtistAlias(artistToAdd.Id, artistNameBeforeCorrect, connection);
@@ -155,7 +155,7 @@ public class SpotifyService
                 return artistToAdd;
             }
 
-            if (artistNameBeforeCorrect != null && !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.CurrentCultureIgnoreCase))
+            if (redirectsEnabled && artistNameBeforeCorrect != null && !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.CurrentCultureIgnoreCase))
             {
                 await this._artistRepository
                     .AddOrUpdateArtistAlias(dbArtist.Id, artistNameBeforeCorrect, connection);
@@ -198,7 +198,7 @@ public class SpotifyService
 
                     if (artistInfo.ArtistUrl != null)
                     {
-                        this._cache.Set(ArtistsService.CacheKeyForArtist(artistInfo.ArtistUrl), dbArtist.SpotifyImageUrl, TimeSpan.FromMinutes(5));
+                        this._cache.Set(ArtistsService.CacheKeyForArtist(artistInfo.ArtistName), dbArtist.SpotifyImageUrl, TimeSpan.FromMinutes(5));
                     }
                 }
 
@@ -496,7 +496,7 @@ public class SpotifyService
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var dbAlbum = await this._albumRepository.GetAlbumForName(albumInfo.ArtistName, albumInfo.AlbumName, connection);
+        var dbAlbum = await AlbumRepository.GetAlbumForName(albumInfo.ArtistName, albumInfo.AlbumName, connection);
 
         if (dbAlbum == null)
         {
@@ -533,7 +533,7 @@ public class SpotifyService
             var coverUrl = albumInfo.AlbumCoverUrl ?? albumToAdd.SpotifyImageUrl;
             if (coverUrl != null && albumInfo.AlbumUrl != null)
             {
-                this._cache.Set(AlbumService.CacheKeyForAlbumCover(albumInfo.AlbumUrl), coverUrl, TimeSpan.FromMinutes(5));
+                this._cache.Set(AlbumService.CacheKeyForAlbumCover(albumInfo.ArtistName, albumInfo.AlbumName), coverUrl, TimeSpan.FromMinutes(5));
             }
 
             albumToAdd.SpotifyImageDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
@@ -593,7 +593,7 @@ public class SpotifyService
             var coverUrl = albumInfo.AlbumCoverUrl ?? dbAlbum.SpotifyImageUrl;
             if (coverUrl != null && albumInfo.AlbumUrl != null)
             {
-                this._cache.Set(AlbumService.CacheKeyForAlbumCover(albumInfo.AlbumUrl), coverUrl, TimeSpan.FromMinutes(5));
+                this._cache.Set(AlbumService.CacheKeyForAlbumCover(albumInfo.ArtistName, albumInfo.AlbumName), coverUrl, TimeSpan.FromMinutes(5));
             }
 
             dbAlbum.SpotifyImageDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
@@ -654,7 +654,7 @@ public class SpotifyService
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var albumTracks = await this._trackRepository.GetAlbumTracks(albumId, connection);
+        var albumTracks = await TrackRepository.GetAlbumTracks(albumId, connection);
         await connection.CloseAsync();
 
         return albumTracks;

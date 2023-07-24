@@ -19,6 +19,8 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
@@ -35,7 +37,7 @@ public class UserCommands : BaseCommandModule
     private readonly GuildService _guildService;
     private readonly IIndexService _indexService;
     private readonly IPrefixService _prefixService;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly SettingService _settingService;
     private readonly TimerService _timer;
     private readonly UserService _userService;
@@ -57,7 +59,7 @@ public class UserCommands : BaseCommandModule
         GuildService guildService,
         IIndexService indexService,
         IPrefixService prefixService,
-        LastFmRepository lastFmRepository,
+        IDataSourceFactory dataSourceFactory,
         SettingService settingService,
         TimerService timer,
         UserService userService,
@@ -75,7 +77,7 @@ public class UserCommands : BaseCommandModule
         this._friendsService = friendsService;
         this._guildService = guildService;
         this._indexService = indexService;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._prefixService = prefixService;
         this._settingService = settingService;
         this._timer = timer;
@@ -134,11 +136,11 @@ public class UserCommands : BaseCommandModule
 
             if (userSettings.DifferentUser)
             {
-                await this.Context.Channel.SendMessageAsync($"<@{userSettings.DiscordUserId}>'s Last.fm profile: {Constants.LastFMUserUrl}{userSettings.UserNameLastFm}", allowedMentions: AllowedMentions.None);
+                await this.Context.Channel.SendMessageAsync($"<@{userSettings.DiscordUserId}>'s Last.fm profile: {LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}", allowedMentions: AllowedMentions.None);
             }
             else
             {
-                await this.Context.Channel.SendMessageAsync($"Your Last.fm profile: {Constants.LastFMUserUrl}{userSettings.UserNameLastFm}", allowedMentions: AllowedMentions.None);
+                await this.Context.Channel.SendMessageAsync($"Your Last.fm profile: {LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}", allowedMentions: AllowedMentions.None);
             }
 
             this.Context.LogCommandUsed();
@@ -178,7 +180,7 @@ public class UserCommands : BaseCommandModule
         }
         else
         {
-            var lfmTopArtists = await this._lastFmRepository.GetTopArtistsAsync(userSettings.UserNameLastFm, timeSettings, artistLimit);
+            var lfmTopArtists = await this._dataSourceFactory.GetTopArtistsAsync(userSettings.UserNameLastFm, timeSettings, artistLimit);
             topArtists = lfmTopArtists.Content?.TopArtists?.Select(s => s.ArtistName).ToList();
         }
 
@@ -192,7 +194,7 @@ public class UserCommands : BaseCommandModule
 
         topArtists = topArtists.Take(artistLimit).ToList();
 
-        var commandUsesLeft = await this._openAiService.GetCommandUsesLeft(contextUser);
+        var commandUsesLeft = await this._openAiService.GetJudgeUsesLeft(contextUser);
 
         try
         {
@@ -259,8 +261,7 @@ public class UserCommands : BaseCommandModule
             this._embed.WithColor(DiscordConstants.InformationColorBlue);
             await ReplyAsync(embed: this._embed.Build(), components: components.Build());
 
-            this.Context.LogCommandUsed(CommandResponse.NoPermission);
-
+            this.Context.LogCommandUsed(CommandResponse.SupporterRequired);
             return;
         }
 
@@ -555,57 +556,18 @@ public class UserCommands : BaseCommandModule
              "The default privacy setting is 'Server'.")]
     [Options("**Global**: You are visible in the global WhoKnows with your Last.fm username",
         "**Server**: You are not visible in global WhoKnows, but users in the same server will still see your name.")]
-    [Examples("privacy global", "privacy server")]
+    [Examples("privacy")]
     [UsernameSetRequired]
     [CommandCategories(CommandCategory.UserSettings)]
-    public async Task PrivacyAsync(params string[] otherSettings)
+    public async Task PrivacyAsync([Remainder] string _ = null)
     {
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
-        var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-        if (otherSettings == null || otherSettings.Length < 1 || otherSettings.First() == "info")
-        {
-            var replyString = $"Use {prfx}privacy to change your visibility to other .fmbot users.";
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var response = UserBuilder.Privacy(new ContextModel(this.Context, prfx, contextUser));
 
-            this._embed.AddField("Options:",
-                "**Global**: You are visible in the global WhoKnows with your Last.fm username\n" +
-                "**Server**: You are not visible in global WhoKnows, but users in the same server will still see your name.\n\n" +
-                "The default privacy setting is 'Server'.");
-
-            this._embed.AddField("Examples:",
-                $"`{prfx}privacy global` \n" +
-                $"`{prfx}privacy server`");
-
-            this._embed.WithTitle("Changing your .fmbot privacy mode");
-            this._embed.WithUrl($"{Constants.DocsUrl}/commands/");
-            this._embed.WithDescription(replyString);
-
-            this._embed.WithFooter(
-                $"Current privacy mode: {userSettings.PrivacyLevel}");
-
-            this._embed.WithColor(DiscordConstants.InformationColorBlue);
-            await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-            this.Context.LogCommandUsed(CommandResponse.Help);
-            return;
-        }
-
-        var newPrivacyLevel = await this._userService.SetPrivacy(userSettings, otherSettings);
-
-        var setReply = $"Your privacy mode has been set to **{newPrivacyLevel}**.\n\n";
-
-        if (newPrivacyLevel == PrivacyLevel.Global)
-        {
-            setReply += " You will now be visible in the global WhoKnows with your Last.fm username.";
-        }
-        if (newPrivacyLevel == PrivacyLevel.Server)
-        {
-            setReply += " You will not be visible in the global WhoKnows with your Last.fm username, but users you share a server with will still see it.";
-        }
-
-        this._embed.WithColor(DiscordConstants.InformationColorBlue);
-        this._embed.WithDescription(setReply);
-        await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-        this.Context.LogCommandUsed();
+        await this.Context.SendResponse(this.Interactivity, response);
+        this.Context.LogCommandUsed(response.CommandResponse);
     }
 
     [Command("login", RunMode = RunMode.Async)]
@@ -613,7 +575,7 @@ public class UserCommands : BaseCommandModule
              "Not receiving a DM? Please check if you have direct messages from server members enabled.")]
     [Alias("set", "setusername", "fm set", "connect")]
     [CommandCategories(CommandCategory.UserSettings)]
-    public async Task LoginAsync([Remainder] string unusedValues = null)
+    public async Task LoginAsync([Remainder] string _ = null)
     {
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
@@ -642,7 +604,7 @@ public class UserCommands : BaseCommandModule
         }
 
         var existingUserSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-        var token = await this._lastFmRepository.GetAuthToken();
+        var token = await this._dataSourceFactory.GetAuthToken();
 
         var reply = new StringBuilder();
         var link =
@@ -704,7 +666,7 @@ public class UserCommands : BaseCommandModule
             await authorizeMessage.ModifyAsync(m =>
             {
                 var description =
-                    $"✅ You have been logged in to .fmbot with the username [{newUserSettings.UserNameLastFM}]({Constants.LastFMUserUrl}{newUserSettings.UserNameLastFM})!\n\n" +
+                    $"✅ You have been logged in to .fmbot with the username [{newUserSettings.UserNameLastFM}]({LastfmUrlExtensions.GetUserUrl(newUserSettings.UserNameLastFM)})!\n\n" +
                     $"`.fmmode` has been set to: `{newUserSettings.FmEmbedType}`\n" +
                     $"`.wkmode` has been set to: `{newUserSettings.Mode ?? WhoKnowsMode.Embed}`\n" +
                     $"`.fmprivacy` has been set to: `{newUserSettings.PrivacyLevel}`";

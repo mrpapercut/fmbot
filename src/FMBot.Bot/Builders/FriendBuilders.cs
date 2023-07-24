@@ -11,7 +11,10 @@ using FMBot.Bot.Models;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
+using FMBot.Domain.Types;
 using FMBot.LastFM.Domain.Types;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
@@ -23,17 +26,17 @@ public class FriendBuilders
     private readonly FriendsService _friendsService;
     private readonly UserService _userService;
     private readonly GuildService _guildService;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly IUpdateService _updateService;
     private readonly SettingService _settingService;
 
     public FriendBuilders(FriendsService friendsService, UserService userService, GuildService guildService,
-        LastFmRepository lastFmRepository, IUpdateService updateService, SettingService settingService)
+        IDataSourceFactory dataSourceFactory, IUpdateService updateService, SettingService settingService)
     {
         this._friendsService = friendsService;
         this._userService = userService;
         this._guildService = guildService;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._updateService = updateService;
         this._settingService = settingService;
     }
@@ -80,7 +83,7 @@ public class FriendBuilders
             response.EmbedAuthor.WithIconUrl(context.DiscordUser.GetAvatarUrl());
         }
 
-        response.EmbedAuthor.WithUrl(Constants.LastFMUserUrl + context.ContextUser.UserNameLastFM);
+        response.EmbedAuthor.WithUrl(LastfmUrlExtensions.GetUserUrl(context.ContextUser.UserNameLastFM));
         response.Embed.WithAuthor(response.EmbedAuthor);
 
         var totalPlaycount = 0;
@@ -101,7 +104,7 @@ public class FriendBuilders
                     var discordUser = await context.DiscordGuild.GetUserAsync(user.DiscordUserId, CacheMode.CacheOnly);
                     if (discordUser?.Username != null)
                     {
-                        friendNameToDisplay = discordUser.Nickname ?? discordUser.Username;
+                        friendNameToDisplay = discordUser.DisplayName;
                     }
                 }
             }
@@ -129,7 +132,7 @@ public class FriendBuilders
             }
             else
             {
-                tracks = await this._lastFmRepository.GetRecentTracksAsync(friendUsername, useCache: true,
+                tracks = await this._dataSourceFactory.GetRecentTracksAsync(friendUsername, useCache: true,
                     sessionKey: sessionKey);
             }
 
@@ -161,7 +164,7 @@ public class FriendBuilders
                 totalPlaycount += (int)tracks.Content.TotalAmount;
             }
 
-            friendResult.Add(new FriendResult(timePlayed, $"**[{friendNameToDisplay}]({Constants.LastFMUserUrl}{friendUsername})** | {track}"));
+            friendResult.Add(new FriendResult(timePlayed, $"**[{friendNameToDisplay}]({LastfmUrlExtensions.GetUserUrl(friendUsername)})** | {track}"));
         }, maxDegreeOfParallelism: 3);
 
         response.EmbedFooter.WithText(embedFooterText + totalPlaycount.ToString("0"));
@@ -223,7 +226,7 @@ public class FriendBuilders
                 !existingFriends.Where(w => w.FriendUser != null).Select(s => s.FriendUser.UserNameLastFM.ToLower())
                     .Contains(friendUsername.ToLower()))
             {
-                if (await this._lastFmRepository.LastFmUserExistsAsync(friendUsername))
+                if (await this._dataSourceFactory.LastFmUserExistsAsync(friendUsername))
                 {
                     await this._friendsService.AddLastFmFriendAsync(context.ContextUser, friendUsername, friendUserId);
                     addedFriendsList.Add(friendUsername);
@@ -267,7 +270,7 @@ public class FriendBuilders
                 $"Successfully added {addedFriendsList.Count} {StringExtensions.GetFriendsString(addedFriendsList.Count)}:\n";
             foreach (var addedFriend in addedFriendsList)
             {
-                reply += $"- *[{addedFriend}]({Constants.LastFMUserUrl}{addedFriend})*\n";
+                reply += $"- *[{addedFriend}]({LastfmUrlExtensions.GetUserUrl(addedFriend)})*\n";
             }
 
             reply += "\n";
@@ -279,7 +282,7 @@ public class FriendBuilders
                 $"Could not add {addedFriendsList.Count} {StringExtensions.GetFriendsString(friendNotFoundList.Count)}. Please ensure you spelled their name correctly and/or that they are registered in .fmbot.\n";
             foreach (var notFoundFriend in friendNotFoundList)
             {
-                reply += $"- *[{notFoundFriend}]({Constants.LastFMUserUrl}{notFoundFriend})*\n";
+                reply += $"- *[{notFoundFriend}]({LastfmUrlExtensions.GetUserUrl(notFoundFriend)})*\n";
             }
 
             reply += "\n";
@@ -291,7 +294,7 @@ public class FriendBuilders
                 $"Could not add {duplicateFriendsList.Count} {StringExtensions.GetFriendsString(duplicateFriendsList.Count)} because you already have them added:\n";
             foreach (var dupeFriend in duplicateFriendsList)
             {
-                reply += $"- *[{dupeFriend}]({Constants.LastFMUserUrl}{dupeFriend})*\n";
+                reply += $"- *[{dupeFriend}]({LastfmUrlExtensions.GetUserUrl(dupeFriend)})*\n";
             }
         }
 
@@ -350,7 +353,7 @@ public class FriendBuilders
             reply += $"Successfully removed {removedFriendsList.Count} friend(s):\n";
             foreach (var removedFriend in removedFriendsList)
             {
-                reply += $"- *[{removedFriend}]({Constants.LastFMUserUrl}{removedFriend})*\n";
+                reply += $"- *[{removedFriend}]({LastfmUrlExtensions.GetUserUrl(removedFriend)})*\n";
             }
 
             reply += "\n";
@@ -361,7 +364,7 @@ public class FriendBuilders
             reply += $"Could not remove {failedRemoveFriends.Count} friend(s).\n";
             foreach (var failedRemovedFriend in failedRemoveFriends)
             {
-                reply += $"- *[{failedRemovedFriend}]({Constants.LastFMUserUrl}{failedRemovedFriend})*\n";
+                reply += $"- *[{failedRemovedFriend}]({LastfmUrlExtensions.GetUserUrl(failedRemovedFriend)})*\n";
             }
 
             reply += "\n";

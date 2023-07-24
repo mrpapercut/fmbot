@@ -7,8 +7,8 @@ using Discord.Commands;
 using Fergun.Interactive;
 using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Domain.Enums;
 using Serilog;
 
 namespace FMBot.Bot.Extensions;
@@ -62,12 +62,6 @@ public static class CommandContextExtensions
             case ResponseType.Paginator:
                 _ = interactiveService.SendPaginatorAsync(
                     response.StaticPaginator,
-                    context.Channel,
-                    TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds));
-                break;
-            case ResponseType.PagedSelection:
-                _ = interactiveService.SendSelectionAsync(
-                    response.PagedSelection,
                     context.Channel,
                     TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds));
                 break;

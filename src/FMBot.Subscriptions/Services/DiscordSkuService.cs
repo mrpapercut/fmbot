@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FMBot.Domain.Types;
 using FMBot.Subscriptions.Models;
 using Microsoft.Extensions.Configuration;
 using Serilog;
@@ -60,7 +61,14 @@ public class DiscordSkuService
 
             return result
                 .Where(w => w.UserId.HasValue)
-                .Select(ResponseToModel)
+                .GroupBy(g => g.UserId.Value)
+                .Select(s => new DiscordEntitlement
+                {
+                    DiscordUserId = s.OrderByDescending(o => o.EndsAt).First().UserId.Value,
+                    Active = !s.OrderByDescending(o => o.EndsAt).First().EndsAt.HasValue || s.OrderByDescending(o => o.EndsAt).First().EndsAt.Value > DateTime.UtcNow.AddDays(-7),
+                    StartsAt = s.OrderByDescending(o => o.EndsAt).First().StartsAt.HasValue ? DateTime.SpecifyKind(s.OrderByDescending(o => o.EndsAt).First().StartsAt.Value, DateTimeKind.Utc) : null,
+                    EndsAt = s.OrderByDescending(o => o.EndsAt).First().EndsAt.HasValue ? DateTime.SpecifyKind(s.OrderByDescending(o => o.EndsAt).First().EndsAt.Value, DateTimeKind.Utc) : null
+                })
                 .ToList();
         }
         catch (Exception ex)
@@ -70,12 +78,12 @@ public class DiscordSkuService
         }
     }
 
-    private DiscordEntitlement ResponseToModel(DiscordEntitlementResponseModel response)
+    private static DiscordEntitlement ResponseToModel(DiscordEntitlementResponseModel response)
     {
         return new DiscordEntitlement
         {
             DiscordUserId = response.UserId.Value,
-            Active = !response.EndsAt.HasValue || response.EndsAt.Value > DateTime.UtcNow,
+            Active = !response.EndsAt.HasValue || response.EndsAt.Value > DateTime.UtcNow.AddDays(-7),
             StartsAt = response.StartsAt.HasValue ? DateTime.SpecifyKind(response.StartsAt.Value, DateTimeKind.Utc) : null,
             EndsAt = response.EndsAt.HasValue ? DateTime.SpecifyKind(response.EndsAt.Value, DateTimeKind.Utc) : null
         };

@@ -14,6 +14,7 @@ using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using IF.Lastfm.Core.Api.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace FMBot.Bot.Services;
 
@@ -187,6 +188,10 @@ public class SettingService
                 settingsModel.PlayDays = (int)(DateTime.UtcNow - registeredLastFm.Value).TotalDays + 1;
                 settingsModel.StartDateTime = registeredLastFm.Value.AddDays(-1);
             }
+            else
+            {
+                settingsModel.StartDateTime = new DateTime(2000, 1, 1);
+            }
         }
         else if (Contains(options, sixDays) && dailyTimePeriods)
         {
@@ -276,6 +281,16 @@ public class SettingService
                 settingsModel.AltDescription = "all-time";
                 settingsModel.UrlParameter = "date_preset=ALL";
                 settingsModel.ApiParameter = "overall";
+
+                if (registeredLastFm.HasValue)
+                {
+                    settingsModel.PlayDays = (int)(DateTime.UtcNow - registeredLastFm.Value).TotalDays + 1;
+                    settingsModel.StartDateTime = registeredLastFm.Value.AddDays(-1);
+                }
+                else
+                {
+                    settingsModel.StartDateTime = new DateTime(2000, 1, 1);
+                }
             }
             else if (defaultTimePeriod == TimePeriod.Monthly)
             {
@@ -406,6 +421,12 @@ public class SettingService
             topListSettings.NewSearchValue = ContainsAndRemove(topListSettings.NewSearchValue, discogs);
             topListSettings.Discogs = true;
         }
+        var timeListened = new[] { "tl", "timelistened" };
+        if (Contains(extraOptions, timeListened))
+        {
+            topListSettings.NewSearchValue = ContainsAndRemove(topListSettings.NewSearchValue, timeListened);
+            topListSettings.Type = TopListType.TimeListened;
+        }
 
         return topListSettings;
     }
@@ -453,7 +474,33 @@ public class SettingService
             whoKnowsSettings.DisplayRoleFilter = true;
         }
 
+        var (enabled, newSearchValue) = RedirectsEnabled(whoKnowsSettings.NewSearchValue);
+        whoKnowsSettings.RedirectsEnabled = enabled;
+        whoKnowsSettings.NewSearchValue = newSearchValue;
+
         return whoKnowsSettings;
+    }
+
+    public static (bool Enabled, string NewSearchValue) RedirectsEnabled(string extraOptions)
+    {
+        var noRedirect = new[] { "nr", "noredirect" };
+        if (Contains(extraOptions, noRedirect))
+        {
+            return (false, ContainsAndRemove(extraOptions, noRedirect));
+        }
+
+        return (true, extraOptions);
+    }
+
+    public static (bool User, string NewSearchValue) IsUserView(string extraOptions)
+    {
+        var guild = new[] { "server", "guild" };
+        if (Contains(extraOptions, guild))
+        {
+            return (false, ContainsAndRemove(extraOptions, guild));
+        }
+
+        return (true, extraOptions);
     }
 
     public async Task<UserSettingsModel> GetUser(
@@ -476,11 +523,11 @@ public class SettingService
         if (discordGuild != null)
         {
             var discordGuildUser = await discordGuild.GetUserAsync(user.DiscordUserId, CacheMode.CacheOnly);
-            discordUserName = discordGuildUser?.Nickname ?? discordGuildUser?.Username ?? discordUser.Username;
+            discordUserName = discordGuildUser?.DisplayName ?? discordUser.GlobalName ?? discordUser.Username;
         }
         else
         {
-            discordUserName = discordUser.Username;
+            discordUserName = discordUser.GlobalName ?? discordUser.Username;
         }
 
         var settingsModel = new UserSettingsModel
@@ -798,7 +845,7 @@ public class SettingService
         return goalAmount;
     }
 
-    public static long GetMilestoneAmount(
+    public static int GetMilestoneAmount(
         string extraOptions,
         long currentPlaycount)
     {
@@ -850,6 +897,11 @@ public class SettingService
                     break;
                 }
             }
+        }
+
+        if (goalAmount < 1)
+        {
+            goalAmount = 1;
         }
 
         return goalAmount;

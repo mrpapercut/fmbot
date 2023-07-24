@@ -10,6 +10,9 @@ using Discord.Commands;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Attributes;
+using FMBot.Domain.Enums;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
@@ -27,64 +30,97 @@ public class UserService
 {
     private readonly IMemoryCache _cache;
     private readonly IDbContextFactory<FMBotDbContext> _contextFactory;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly BotSettings _botSettings;
     private readonly ArtistRepository _artistRepository;
     private readonly CountryService _countryService;
     private readonly PlayService _playService;
 
-    public UserService(IMemoryCache cache, IDbContextFactory<FMBotDbContext> contextFactory, LastFmRepository lastFmRepository, IOptions<BotSettings> botSettings, ArtistRepository artistRepository, CountryService countryService, PlayService playService)
+    public UserService(IMemoryCache cache,
+        IDbContextFactory<FMBotDbContext> contextFactory,
+        IDataSourceFactory dataSourceFactory,
+        IOptions<BotSettings> botSettings,
+        ArtistRepository artistRepository,
+        CountryService countryService,
+        PlayService playService)
     {
         this._cache = cache;
         this._contextFactory = contextFactory;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._artistRepository = artistRepository;
         this._countryService = countryService;
         this._playService = playService;
         this._botSettings = botSettings.Value;
     }
 
-    public async Task<bool> UserRegisteredAsync(IUser discordUser)
+    public async Task<User> GetUserSettingsAsync(IUser discordUser)
+    {
+        return await GetUserAsync(discordUser.Id);
+    }
+
+    public async Task<User> GetUserAsync(ulong discordUserId)
+    {
+        var cacheKey = UserCacheKey(discordUserId);
+
+        if (this._cache.TryGetValue(cacheKey, out User user))
+        {
+            return user;
+        }
+
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        user = await db.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUserId);
+
+        if (user != null)
+        {
+            this._cache.Set(cacheKey, user, TimeSpan.FromSeconds(3));
+        }
+
+        return user;
+    }
+
+    private static string UserCacheKey(ulong discordUserId)
+    {
+        return $"user-{discordUserId}";
+    }
+
+    public async Task<User> GetUserForIdAsync(int userId)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
-        var isRegistered = await db.Users
+        return await db.Users
             .AsNoTracking()
-            .AnyAsync(f => f.DiscordUserId == discordUser.Id);
+            .FirstOrDefaultAsync(f => f.UserId == userId);
+    }
 
-        return isRegistered;
+    public async Task<User> GetUserWithDiscogs(ulong discordUserId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        return await db.Users
+            .Include(i => i.UserDiscogs)
+            .Include(i => i.DiscogsReleases)
+            .ThenInclude(i => i.Release)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUserId);
+    }
+
+    public async Task<bool> UserRegisteredAsync(IUser discordUser)
+    {
+        var user = await GetUserAsync(discordUser.Id);
+
+        return user != null;
     }
 
     public async Task<bool> UserBlockedAsync(ulong discordUserId)
     {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        const string cacheKey = "blocked-users";
+        var user = await GetUserAsync(discordUserId);
 
-        if (this._cache.TryGetValue(cacheKey, out IReadOnlyList<User> blockedUsers))
-        {
-            return blockedUsers.Select(s => s.DiscordUserId).Contains(discordUserId);
-        }
-
-        blockedUsers = await db.Users
-            .AsNoTracking()
-            .Where(w => w.Blocked == true)
-            .ToListAsync();
-
-        this._cache.Set(cacheKey, blockedUsers, TimeSpan.FromMinutes(15));
-
-        return blockedUsers.Select(s => s.DiscordUserId).Contains(discordUserId);
+        return user?.Blocked == true;
     }
 
     public async Task<bool> UserHasSessionAsync(IUser discordUser)
     {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        var user = await db.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUser.Id);
-
-        if (user == null)
-        {
-            return false;
-        }
+        var user = await GetUserSettingsAsync(discordUser);
 
         return !string.IsNullOrEmpty(user.SessionKeyLastFm);
     }
@@ -125,25 +161,8 @@ public class UserService
         db.Entry(user).State = EntityState.Modified;
 
         await db.SaveChangesAsync();
-    }
 
-    public async Task<User> GetUserSettingsAsync(IUser discordUser)
-    {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        return await db.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUser.Id);
-    }
-
-    public async Task<User> GetUserWithDiscogs(ulong discordUserId)
-    {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        return await db.Users
-            .Include(i => i.UserDiscogs)
-            .Include(i => i.DiscogsReleases)
-            .ThenInclude(i => i.Release)
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUserId);
+        this._cache.Remove(UserCacheKey(user.DiscordUserId));
     }
 
     public async Task<User> GetUserWithFriendsAsync(IUser discordUser)
@@ -154,22 +173,6 @@ public class UserService
             .ThenInclude(i => i.FriendUser)
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.DiscordUserId == discordUser.Id);
-    }
-
-    public async Task<User> GetUserAsync(ulong discordUserId)
-    {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        return await db.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUserId);
-    }
-
-    public async Task<User> GetUserForIdAsync(int userId)
-    {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        return await db.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.UserId == userId);
     }
 
     public async Task<List<User>> GetAllDiscordUserIds()
@@ -196,20 +199,17 @@ public class UserService
     {
         if (guild == null)
         {
-            return user.Username;
+            return user.GlobalName ?? user.Username;
         }
 
         var guildUser = await guild.GetUserAsync(user.Id);
 
-        return guildUser?.Nickname ?? user.Username;
+        return guildUser?.DisplayName ?? user.GlobalName ?? user.Username;
     }
 
     public async Task<UserType> GetRankAsync(IUser discordUser)
     {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        var user = await db.Users
-            .AsQueryable()
-            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUser.Id);
+        var user = await GetUserSettingsAsync(discordUser);
 
         return user?.UserType ?? UserType.User;
     }
@@ -262,21 +262,21 @@ public class UserService
         if (footerOptions.HasFlag(FmFooterOption.ArtistPlays))
         {
             var trackPlaycount =
-                await WhoKnowsArtistService.GetArtistPlayCountForUser(connection, artistName, userSettings.UserId) ?? 0;
+                await ArtistRepository.GetArtistPlayCountForUser(connection, artistName, userSettings.UserId);
 
             options.Add($"{trackPlaycount} artist scrobbles");
         }
         if (footerOptions.HasFlag(FmFooterOption.AlbumPlays) && albumName != null)
         {
             var albumPlaycount =
-                await WhoKnowsAlbumService.GetAlbumPlayCountForUser(connection, artistName, albumName, userSettings.UserId) ?? 0;
+                await AlbumRepository.GetAlbumPlayCountForUser(connection, artistName, albumName, userSettings.UserId);
 
             options.Add($"{albumPlaycount} album scrobbles");
         }
         if (footerOptions.HasFlag(FmFooterOption.TrackPlays))
         {
             var trackPlaycount =
-                await WhoKnowsTrackService.GetTrackPlayCountForUser(connection, artistName, trackName, userSettings.UserId) ?? 0;
+                await TrackRepository.GetTrackPlayCountForUser(connection, artistName, trackName, userSettings.UserId);
 
             options.Add($"{trackPlaycount} track scrobbles");
         }
@@ -648,6 +648,15 @@ public class UserService
             description.AppendLine($"- **{stats.ArtistCount}** top artists");
             description.AppendLine($"- **{stats.AlbumCount}** top albums");
             description.AppendLine($"- **{stats.TrackCount}** top tracks");
+
+            if (stats.ImportCount != null)
+            {
+                description.AppendLine();
+
+                var name = user.DataSource.GetAttribute<OptionAttribute>().Name;
+                description.AppendLine($"Import setting: {name}");
+                description.AppendLine($"Combined with your **{stats.ImportCount}** imported plays you have a total of **{stats.TotalCount}** plays.");
+            }
         }
 
         if (user.UserType == UserType.User &&
@@ -664,7 +673,6 @@ public class UserService
         return (promo, description.ToString());
     }
 
-    // Set LastFM Name
     public async Task SetLastFm(IUser discordUser, User newUserSettings, bool updateSessionKey = false)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -718,6 +726,8 @@ public class UserService
 
             await db.SaveChangesAsync();
         }
+
+        this._cache.Remove(UserCacheKey(discordUser.Id));
     }
 
     public async Task<bool> GetAndStoreAuthSession(IUser contextUser, string token)
@@ -729,7 +739,7 @@ public class UserService
         {
             await Task.Delay(loginDelay);
 
-            var authSession = await this._lastFmRepository.GetAuthSession(token);
+            var authSession = await this._dataSourceFactory.GetAuthSession(token);
 
             if (authSession.Success)
             {
@@ -776,20 +786,26 @@ public class UserService
 
         await db.SaveChangesAsync();
 
+        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+
         return userToUpdate.PrivacyLevel;
     }
 
-    public async Task<PrivacyLevel> SetPrivacyLevel(User userToUpdate, PrivacyLevel privacyLevel)
+    public async Task<PrivacyLevel> SetPrivacyLevel(int userId, PrivacyLevel privacyLevel)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
 
-        userToUpdate.PrivacyLevel = privacyLevel;
+        var user = await db.Users.FirstAsync(f => f.UserId == userId);
 
-        db.Update(userToUpdate);
+        user.PrivacyLevel = privacyLevel;
+
+        db.Update(user);
 
         await db.SaveChangesAsync();
 
-        return userToUpdate.PrivacyLevel;
+        this._cache.Remove(UserCacheKey(user.DiscordUserId));
+
+        return user.PrivacyLevel;
     }
 
     public static User SetWkMode(User userSettings, string[] extraOptions)
@@ -818,6 +834,24 @@ public class UserService
 
         await db.SaveChangesAsync();
 
+        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+
+        return user;
+    }
+
+    public async Task<User> SetDataSource(User userToUpdate, DataSource dataSource)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var user = await db.Users.FirstAsync(f => f.UserId == userToUpdate.UserId);
+
+        user.DataSource = dataSource;
+
+        db.Update(user);
+
+        await db.SaveChangesAsync();
+
+        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+
         return user;
     }
 
@@ -832,6 +866,8 @@ public class UserService
 
         await db.SaveChangesAsync();
 
+        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+
         return user;
     }
 
@@ -845,6 +881,8 @@ public class UserService
         db.Update(user);
 
         await db.SaveChangesAsync();
+
+        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
 
         return user;
     }
@@ -877,6 +915,8 @@ public class UserService
 
             await db.SaveChangesAsync();
 
+            this._cache.Remove(UserCacheKey(user.DiscordUserId));
+
             PublicProperties.RegisteredUsers.TryRemove(user.DiscordUserId, out _);
         }
         catch (Exception e)
@@ -902,6 +942,8 @@ public class UserService
 
         await db.SaveChangesAsync();
 
+        this._cache.Remove(UserCacheKey(user.DiscordUserId));
+
         return user.RymEnabled;
     }
 
@@ -915,7 +957,9 @@ public class UserService
 
         db.Update(user);
 
-        await db.SaveChangesAsync(); ;
+        this._cache.Remove(UserCacheKey(user.DiscordUserId));
+
+        await db.SaveChangesAsync();
     }
 
     public async Task<int> GetTotalUserCountAsync()
@@ -966,7 +1010,7 @@ public class UserService
 
             if (user != null)
             {
-                if (!await this._lastFmRepository.LastFmUserExistsAsync(user.UserNameLastFM))
+                if (!await this._dataSourceFactory.LastFmUserExistsAsync(user.UserNameLastFM))
                 {
                     await DeleteUser(user.UserId);
                     Log.Information("DeleteInactiveUsers: User {userNameLastFm} | {userId} | {discordUserId} deleted", user.UserNameLastFM, user.UserId, user.DiscordUserId);

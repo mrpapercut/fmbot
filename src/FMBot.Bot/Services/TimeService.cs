@@ -26,7 +26,7 @@ public class TimeService
         this._botSettings = botSettings.Value;
     }
 
-    public async Task<TimeSpan> GetPlayTimeForPlays(IEnumerable<UserPlayTs> plays)
+    public async Task<TimeSpan> GetPlayTimeForPlays(IEnumerable<UserPlay> plays)
     {
         await CacheAllTrackLengths();
 
@@ -35,13 +35,23 @@ public class TimeService
         return TimeSpan.FromMilliseconds(totalMs);
     }
 
-    public async Task<TimeSpan> GetPlayTimeForTrackWithPlaycount(string artistName, string trackName, long playcount)
+    public async Task<TimeSpan> GetPlayTimeForTrackWithPlaycount(string artistName, string trackName, long playcount, TopTimeListened topTimeListened = null)
     {
         await CacheAllTrackLengths();
 
+        long timeListened = 0;
+
+        if (topTimeListened != null)
+        {
+            timeListened += topTimeListened.MsPlayed;
+            playcount -= topTimeListened.PlaysWithPlayTime;
+        }
+
         var length = GetTrackLengthForTrack(artistName, trackName);
 
-        return TimeSpan.FromMilliseconds(length * playcount);
+        timeListened += length * playcount;
+
+        return TimeSpan.FromMilliseconds(timeListened);
     }
 
     private long GetTrackLengthForTrack(string artistName, string trackName)
@@ -58,21 +68,18 @@ public class TimeService
         return avgArtistTrackLength ?? 210000;
     }
 
-    public async Task<TimeSpan?> GetTrackLengthForTrackOrDefault(string artistName, string trackName)
+    public async Task<TimeSpan> GetAllTimePlayTimeForAlbum(List<AlbumTrack> albumTracks, List<UserTrack> userTracks, long totalPlaycount, TopTimeListened topTimeListened = null)
     {
         await CacheAllTrackLengths();
 
-        var trackLength = (long?)this._cache.Get(CacheKeyForTrack(trackName.ToLower(), artistName.ToLower()));
-
-        return trackLength.HasValue ? TimeSpan.FromMilliseconds(trackLength.Value) : null;
-    }
-
-    public async Task<TimeSpan> GetPlayTimeForAlbum(List<AlbumTrack> albumTracks, List<UserTrack> userTracks, long totalPlaycount)
-    {
-        await CacheAllTrackLengths();
-
-        long totalPlaytime = 0;
+        long timeListenedSeconds = 0;
         var playsLeft = totalPlaycount;
+
+        if (topTimeListened != null)
+        {
+            timeListenedSeconds += (topTimeListened.MsPlayed / 1000);
+            playsLeft -= topTimeListened.PlaysWithPlayTime;
+        }
 
         foreach (var track in albumTracks)
         {
@@ -80,28 +87,97 @@ public class TimeService
                 StringExtensions.SanitizeTrackNameForComparison(track.TrackName)
                     .Equals(StringExtensions.SanitizeTrackNameForComparison(f.Name)));
 
-            var trackLength = track.Duration ?? (GetTrackLengthForTrack(track.ArtistName, track.ArtistName) / 1000);
             if (albumTrackWithPlaycount != null)
             {
-                totalPlaytime += (trackLength * albumTrackWithPlaycount.Playcount);
-                playsLeft -= albumTrackWithPlaycount.Playcount;
+                var trackPlaycount = albumTrackWithPlaycount.Playcount;
+
+                var countedTrack = topTimeListened?.CountedTracks?.FirstOrDefault(f =>
+                    StringExtensions.SanitizeTrackNameForComparison(track.TrackName)
+                        .Equals(StringExtensions.SanitizeTrackNameForComparison(f.Name)));
+
+                if (countedTrack != null)
+                {
+                    trackPlaycount -= countedTrack.CountedPlays;
+                }
+
+                if (trackPlaycount > 0)
+                {
+                    var trackLength = track.DurationSeconds ?? (GetTrackLengthForTrack(track.ArtistName, track.ArtistName) / 1000);
+
+                    timeListenedSeconds += (trackLength * trackPlaycount);
+                    playsLeft -= trackPlaycount;
+                }
             }
         }
 
         if (playsLeft > 0)
         {
-            var avgTrackLength = albumTracks.Average(a => a.Duration);
+            var avgTrackLengthSeconds = albumTracks.Average(a => a.DurationSeconds);
 
-            if (avgTrackLength == null)
+            if (avgTrackLengthSeconds == null)
             {
                 var avgArtistTrackLength = (long?)this._cache.Get(CacheKeyForArtist(albumTracks.First().ArtistName));
-                avgTrackLength = avgArtistTrackLength ?? 210000;
+                avgTrackLengthSeconds = (avgArtistTrackLength / 1000) ?? 210;
             }
 
-            totalPlaytime += (playsLeft * (long)avgTrackLength);
+            timeListenedSeconds += (playsLeft * (long)avgTrackLengthSeconds);
         }
 
-        return TimeSpan.FromSeconds(totalPlaytime);
+        return TimeSpan.FromSeconds(timeListenedSeconds);
+    }
+
+    public async Task<TimeSpan> GetAllTimePlayTimeForArtist(string artistName, List<UserTrack> userTracksForArtist, long totalPlaycount, TopTimeListened topTimeListened = null)
+    {
+        await CacheAllTrackLengths();
+
+        long timeListenedSeconds = 0;
+        var playsLeft = totalPlaycount;
+
+        if (topTimeListened != null)
+        {
+            timeListenedSeconds += (topTimeListened.MsPlayed / 1000);
+            playsLeft -= topTimeListened.PlaysWithPlayTime;
+        }
+
+        foreach (var track in userTracksForArtist)
+        {
+            var trackPlaycount = track.Playcount;
+
+            var countedTrack = topTimeListened?.CountedTracks?.FirstOrDefault(f =>
+                StringExtensions.SanitizeTrackNameForComparison(track.Name)
+                    .Equals(StringExtensions.SanitizeTrackNameForComparison(f.Name)));
+
+            if (countedTrack != null)
+            {
+                trackPlaycount -= countedTrack.CountedPlays;
+            }
+
+            if (trackPlaycount > 0)
+            {
+                var trackLength = GetTrackLengthForTrack(track.ArtistName, track.ArtistName) / 1000;
+
+                timeListenedSeconds += (trackLength * trackPlaycount);
+                playsLeft -= trackPlaycount;
+            }
+        }
+
+        if (playsLeft > 0)
+        {
+            long avgTrackLength;
+            if (totalPlaycount > 50)
+            {
+                avgTrackLength = timeListenedSeconds / (totalPlaycount - playsLeft);
+            }
+            else
+            {
+                var avgArtistTrackLength = (long?)this._cache.Get(CacheKeyForArtist(artistName));
+                avgTrackLength = (avgArtistTrackLength / 1000) ?? 210;
+            }
+
+            timeListenedSeconds += (playsLeft * (long)avgTrackLength);
+        }
+
+        return TimeSpan.FromSeconds(timeListenedSeconds);
     }
 
     private async Task CacheAllTrackLengths()
@@ -145,7 +221,7 @@ public class TimeService
         return $"artist-length-avg-{artistName}";
     }
 
-    public async Task<List<WhoKnowsObjectWithUser>> UserPlaysToGuildLeaderboard(ICommandContext context, List<UserPlayTs> userPlays, IDictionary<int, FullGuildUser> guildUsers)
+    public async Task<List<WhoKnowsObjectWithUser>> UserPlaysToGuildLeaderboard(ICommandContext context, List<UserPlay> userPlays, IDictionary<int, FullGuildUser> guildUsers)
     {
         var whoKnowsAlbumList = new List<WhoKnowsObjectWithUser>();
 
@@ -169,7 +245,7 @@ public class TimeService
                     var discordUser = await context.Guild.GetUserAsync(guildUser.DiscordUserId);
                     if (discordUser != null)
                     {
-                        userName = discordUser.Nickname ?? discordUser.Username;
+                        userName = discordUser.DisplayName;
                     }
                 }
 
@@ -190,5 +266,29 @@ public class TimeService
         return whoKnowsAlbumList
             .OrderByDescending(o => o.Playcount)
             .ToList();
+    }
+
+    public async Task<bool> IsValidScrobble(string artistName, string trackName, int msPlayed)
+    {
+        if (msPlayed < 30000)
+        {
+            return false;
+        }
+
+        if (msPlayed > 240000)
+        {
+            return true;
+        }
+
+        await CacheAllTrackLengths();
+
+        var trackLength = GetTrackLengthForTrack(artistName, trackName);
+
+        if (msPlayed > trackLength / 2)
+        {
+            return true;
+        }
+
+        return false;
     }
 }

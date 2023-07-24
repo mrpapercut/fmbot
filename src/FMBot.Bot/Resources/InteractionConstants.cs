@@ -8,6 +8,8 @@ public static class InteractionConstants
     public const string FmSettingFooter = "fm-footer-menu";
     public const string FmSettingFooterSupporter = "fm-footer-menu-supporter";
 
+    public const string FmPrivacySetting = "fm-gwk-privacy";
+
     public const string FmGuildSettingType = "fm-guild-type-menu";
 
     public const string SetAllowedRoleMenu = "guild-allowed-roles-menu";
@@ -18,6 +20,9 @@ public static class InteractionConstants
     public const string SetGuildActivityThresholdModal = "set-guild-activity-threshold-modal";
     public const string RemoveGuildActivityThreshold = "remove-guild-activity-threshold";
 
+    public const string ImportManage = "user-import-manage";
+    public const string ImportSetting = "user-import-setting";
+    public const string ImportClear = "user-import-clear";
 
     public const string CensorTypes = "admin-censor-*";
 
@@ -73,5 +78,8 @@ public static class InteractionConstants
     public const string WhoKnowsRolePicker = "whoknows-role-picker";
     public const string WhoKnowsAlbumRolePicker = "whoknows-album-role-picker";
     public const string WhoKnowsTrackRolePicker = "whoknows-track-role-picker";
+
+    public const string GenreGuild = "genre-guild";
+    public const string GenreUser = "genre-user";
 
 }

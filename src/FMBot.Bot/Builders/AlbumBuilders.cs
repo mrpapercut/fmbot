@@ -17,6 +17,8 @@ using FMBot.Bot.Services.Guild;
 using FMBot.Bot.Services.ThirdParty;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Images.Generators;
 using FMBot.LastFM.Repositories;
@@ -37,7 +39,7 @@ public class AlbumBuilders
     private readonly TimeService _timeService;
     private readonly CensorService _censorService;
     private readonly IUpdateService _updateService;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly SupporterService _supporterService;
     private readonly IIndexService _indexService;
     private readonly WhoKnowsPlayService _whoKnowsPlayService;
@@ -54,7 +56,7 @@ public class AlbumBuilders
         IUpdateService updateService,
         TimeService timeService,
         CensorService censorService,
-        LastFmRepository lastFmRepository,
+        IDataSourceFactory dataSourceFactory,
         SupporterService supporterService,
         IIndexService indexService,
         WhoKnowsPlayService whoKnowsPlayService,
@@ -70,7 +72,7 @@ public class AlbumBuilders
         this._updateService = updateService;
         this._timeService = timeService;
         this._censorService = censorService;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._supporterService = supporterService;
         this._indexService = indexService;
         this._whoKnowsPlayService = whoKnowsPlayService;
@@ -127,7 +129,7 @@ public class AlbumBuilders
 
         if (albumSearch.Album.UserPlaycount.HasValue && albumSearch.Album.AlbumTracks != null && albumSearch.Album.AlbumTracks.Any() && artistUserTracks.Any())
         {
-            var listeningTime = await this._timeService.GetPlayTimeForAlbum(albumSearch.Album.AlbumTracks, artistUserTracks,
+            var listeningTime = await this._timeService.GetAllTimePlayTimeForAlbum(albumSearch.Album.AlbumTracks, artistUserTracks,
                 albumSearch.Album.UserPlaycount.Value);
             globalStats.AppendLine($"`{StringExtensions.GetLongListeningTimeString(listeningTime)}` spent listening");
         }
@@ -265,11 +267,11 @@ public class AlbumBuilders
                         $" - *{albumTrackWithPlaycount.Playcount} {StringExtensions.GetPlaysString(albumTrackWithPlaycount.Playcount)}*");
                 }
 
-                if (track.Duration.HasValue)
+                if (track.DurationSeconds.HasValue)
                 {
                     trackDescription.Append(albumTrackWithPlaycount == null ? " — " : " - ");
 
-                    var duration = TimeSpan.FromSeconds(track.Duration.Value);
+                    var duration = TimeSpan.FromSeconds(track.DurationSeconds.Value);
                     var formattedTrackLength =
                         $"{(duration.Hours == 0 ? "" : $"{duration.Hours}:")}{duration.Minutes}:{duration.Seconds:D2}";
                     trackDescription.Append($"`{formattedTrackLength}`");
@@ -681,7 +683,7 @@ public class AlbumBuilders
         if (context.ContextUser.PrivacyLevel != PrivacyLevel.Global)
         {
             footer += $"\nYou are currently not globally visible - use " +
-                      $"'{context.Prefix}privacy global' to enable.";
+                      $"'{context.Prefix}privacy' to enable.";
         }
         if (settings.HidePrivateUsers)
         {
@@ -773,8 +775,8 @@ public class AlbumBuilders
             foreach (var album in page)
             {
                 var name = guildListSettings.OrderType == OrderType.Listeners
-                    ? $"`{album.ListenerCount}` · **{album.ArtistName}** - **{album.AlbumName}** ({album.TotalPlaycount} {StringExtensions.GetPlaysString(album.TotalPlaycount)})"
-                    : $"`{album.TotalPlaycount}` · **{album.ArtistName}** - **{album.AlbumName}** ({album.ListenerCount} {StringExtensions.GetListenersString(album.ListenerCount)})";
+                    ? $"`{album.ListenerCount}` · **{album.ArtistName}** - **{album.AlbumName}** · *{album.TotalPlaycount} {StringExtensions.GetPlaysString(album.TotalPlaycount)}*"
+                    : $"`{album.TotalPlaycount}` · **{album.ArtistName}** - **{album.AlbumName}** · *{album.ListenerCount} {StringExtensions.GetListenersString(album.ListenerCount)}*";
 
                 if (previousTopGuildAlbums != null && previousTopGuildAlbums.Any())
                 {
@@ -844,7 +846,7 @@ public class AlbumBuilders
                 {
                     TrackName = s.Name,
                     ArtistName = albumSearch.Album.ArtistName,
-                    Duration = s.DurationMs / 1000
+                    DurationSeconds = s.DurationMs / 1000
                 }).ToList();
                 spotifySource = true;
             }
@@ -870,9 +872,10 @@ public class AlbumBuilders
         footer.Append(spotifySource ? "Album source: Spotify | " : "Album source: Last.fm | ");
         footer.Append($"{userSettings.DisplayName} has {albumSearch.Album.UserPlaycount} total scrobbles on this album");
 
-        var url = $"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library/music/" +
-                  $"{UrlEncoder.Default.Encode(albumSearch.Album.ArtistName)}/" +
-                  $"{UrlEncoder.Default.Encode(albumSearch.Album.AlbumName)}/";
+        var url = LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm,
+            $"/library/music/" +
+            $"{UrlEncoder.Default.Encode(albumSearch.Album.ArtistName)}/" +
+            $"{UrlEncoder.Default.Encode(albumSearch.Album.AlbumName)}/");
 
         var i = 0;
         var tracksDisplayed = 0;
@@ -904,11 +907,11 @@ public class AlbumBuilders
                         $" - *{albumTrackWithPlaycount.Playcount} {StringExtensions.GetPlaysString(albumTrackWithPlaycount.Playcount)}*");
                 }
 
-                if (albumTrack.Duration.HasValue)
+                if (albumTrack.DurationSeconds.HasValue)
                 {
                     description.Append(albumTrackWithPlaycount == null ? " — " : " - ");
 
-                    var duration = TimeSpan.FromSeconds(albumTrack.Duration.Value);
+                    var duration = TimeSpan.FromSeconds(albumTrack.DurationSeconds.Value);
                     var formattedTrackLength =
                         $"{(duration.Hours == 0 ? "" : $"{duration.Hours}:")}{duration.Minutes}:{duration.Seconds:D2}";
                     description.Append($"`{formattedTrackLength}`");
@@ -1029,7 +1032,7 @@ public class AlbumBuilders
             return response;
         }
 
-        var image = await this._lastFmRepository.GetAlbumImageAsStreamAsync(albumCoverUrl);
+        var image = await this._dataSourceFactory.GetAlbumImageAsStreamAsync(albumCoverUrl);
         if (image == null)
         {
             response.Embed.WithDescription("Sorry, something went wrong while getting album cover for this album: \n" +
@@ -1104,19 +1107,20 @@ public class AlbumBuilders
             response.EmbedAuthor.WithIconUrl(context.DiscordUser.GetAvatarUrl());
         }
 
-        var userUrl =
-            $"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library/albums?{timeSettings.UrlParameter}";
+        var userUrl = LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm,
+            $"/library/albums?{timeSettings.UrlParameter}");
 
         response.EmbedAuthor.WithName($"Top {timeSettings.Description.ToLower()} albums for {userTitle}");
         response.EmbedAuthor.WithUrl(userUrl);
 
         const int amount = 200;
 
-        var albums = await this._lastFmRepository.GetTopAlbumsAsync(userSettings.UserNameLastFm, timeSettings, amount);
+        var albums = await this._dataSourceFactory.GetTopAlbumsAsync(userSettings.UserNameLastFm, timeSettings, amount);
         if (!albums.Success || albums.Content == null)
         {
             response.Embed.ErrorResponse(albums.Error, albums.Message, "top albums", context.DiscordUser);
             response.CommandResponse = CommandResponse.LastFmError;
+            response.ResponseType = ResponseType.Embed;
             return response;
         }
         if (albums.Content?.TopAlbums == null || !albums.Content.TopAlbums.Any())
@@ -1124,13 +1128,14 @@ public class AlbumBuilders
             response.Embed.WithDescription($"Sorry, you or the user you're searching for don't have any top albums in the [selected time period]({userUrl}).");
             response.Embed.WithColor(DiscordConstants.WarningColorOrange);
             response.CommandResponse = CommandResponse.NoScrobbles;
+            response.ResponseType = ResponseType.Embed;
             return response;
         }
 
         var previousTopAlbums = new List<TopAlbum>();
         if (topListSettings.Billboard && timeSettings.BillboardStartDateTime.HasValue && timeSettings.BillboardEndDateTime.HasValue)
         {
-            var previousAlbumsCall = await this._lastFmRepository
+            var previousAlbumsCall = await this._dataSourceFactory
                 .GetTopAlbumsForCustomTimePeriodAsyncAsync(userSettings.UserNameLastFm, timeSettings.BillboardStartDateTime.Value, timeSettings.BillboardEndDateTime.Value, amount);
 
             if (previousAlbumsCall.Success)
@@ -1159,7 +1164,7 @@ public class AlbumBuilders
                     url = StringExtensions.GetRymUrl(album.AlbumName, album.ArtistName);
                 }
 
-                var name = $"**{album.ArtistName}** - **[{escapedAlbumName}]({url})** ({album.UserPlaycount} {StringExtensions.GetPlaysString(album.UserPlaycount)})";
+                var name = $"**{album.ArtistName}** - **[{escapedAlbumName}]({url})** - *{album.UserPlaycount} {StringExtensions.GetPlaysString(album.UserPlaycount)}*";
 
                 if (topListSettings.Billboard && previousTopAlbums.Any())
                 {

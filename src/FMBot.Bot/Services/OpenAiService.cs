@@ -60,7 +60,7 @@ public class OpenAiService
         return responseModel;
     }
 
-    public async Task<OpenAiResponse> GetResponse(List<string> artists, bool compliment)
+    public async Task<OpenAiResponse> GetJudgeResponse(List<string> artists, bool compliment, bool supporter = false)
     {
         var prompt = compliment ? this._botSettings.OpenAi.ComplimentPrompt : this._botSettings.OpenAi.RoastPrompt;
 
@@ -70,7 +70,9 @@ public class OpenAiService
              artistList.Add(artist[..Math.Min(artist.Length, 34)]);
         }
 
-        return await SendRequest($"{prompt} {string.Join(", ", artistList)}");
+        var model = supporter ? "gpt-4" : "gpt-3.5-turbo";
+
+        return await SendRequest($"{prompt} {string.Join(", ", artistList)}", model);
     }
 
     public async Task<AiGeneration> StoreAiGeneration(OpenAiResponse response, int userId, int? targetedUserId)
@@ -95,14 +97,14 @@ public class OpenAiService
         return generation;
     }
 
-    public async Task<int> GetCommandUsesLeft(User user)
+    public async Task<int> GetJudgeUsesLeft(User user)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
 
         var filterDate = DateTime.UtcNow.Date;
         var generatedToday = await db.AiGenerations.CountAsync(c => c.UserId == user.UserId && c.DateGenerated >= filterDate);
 
-        var dailyAmount = user.UserType != UserType.User ? 25 : 3;
+        var dailyAmount = user.UserType != UserType.User ? 15 : 3;
         return dailyAmount - generatedToday;
     }
 

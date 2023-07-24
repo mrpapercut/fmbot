@@ -10,10 +10,11 @@ using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.ThirdParty;
 using FMBot.Domain;
+using FMBot.Domain.Extensions;
+using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
+using FMBot.Domain.Types;
 using FMBot.Images.Generators;
-using FMBot.LastFM.Domain.Types;
-using FMBot.LastFM.Repositories;
 using SkiaSharp;
 using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
 
@@ -23,18 +24,18 @@ public class CountryBuilders
 {
     private readonly CountryService _countryService;
     private readonly UserService _userService;
-    private readonly LastFmRepository _lastFmRepository;
+    private readonly IDataSourceFactory _dataSourceFactory;
     private readonly ArtistsService _artistsService;
     private readonly PlayService _playService;
     private readonly PuppeteerService _puppeteerService;
     private readonly SpotifyService _spotifyService;
 
-    public CountryBuilders(CountryService countryService, UserService userService, LastFmRepository lastFmRepository,
+    public CountryBuilders(CountryService countryService, UserService userService, IDataSourceFactory dataSourceFactory,
         ArtistsService artistsService, PlayService playService, PuppeteerService puppeteerService, SpotifyService spotifyService)
     {
         this._countryService = countryService;
         this._userService = userService;
-        this._lastFmRepository = lastFmRepository;
+        this._dataSourceFactory = dataSourceFactory;
         this._artistsService = artistsService;
         this._playService = playService;
         this._puppeteerService = puppeteerService;
@@ -53,7 +54,7 @@ public class CountryBuilders
         CountryInfo country = null;
         if (string.IsNullOrWhiteSpace(countryOptions))
         {
-            var recentTracks = await this._lastFmRepository.GetRecentTracksAsync(context.ContextUser.UserNameLastFM, 1, true, context.ContextUser.SessionKeyLastFm);
+            var recentTracks = await this._dataSourceFactory.GetRecentTracksAsync(context.ContextUser.UserNameLastFM, 1, true, context.ContextUser.SessionKeyLastFm);
 
             if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
             {
@@ -70,7 +71,7 @@ public class CountryBuilders
 
             if (foundCountry == null)
             {
-                var artistCall = await this._lastFmRepository.GetArtistInfoAsync(artistName, context.ContextUser.UserNameLastFM);
+                var artistCall = await this._dataSourceFactory.GetArtistInfoAsync(artistName, context.ContextUser.UserNameLastFM);
                 if (artistCall.Success)
                 {
                     var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistCall.Content);
@@ -207,7 +208,7 @@ public class CountryBuilders
             var genrePageString = new StringBuilder();
             foreach (var genreArtist in genrePage)
             {
-                genrePageString.AppendLine($"{counter}. **{genreArtist.ArtistName}** ({genreArtist.UserPlaycount} {StringExtensions.GetPlaysString(genreArtist.UserPlaycount)})");
+                genrePageString.AppendLine($"{counter}. **{genreArtist.ArtistName}** - *{genreArtist.UserPlaycount} {StringExtensions.GetPlaysString(genreArtist.UserPlaycount)}*");
                 counter++;
             }
 
@@ -223,7 +224,7 @@ public class CountryBuilders
             pages.Add(new PageBuilder()
                 .WithDescription(genrePageString.ToString())
                 .WithTitle(title)
-                .WithUrl($"{Constants.LastFMUserUrl}{context.ContextUser.UserNameLastFM}/library/artists?date_preset=ALL")
+                .WithUrl($"{LastfmUrlExtensions.GetUserUrl(context.ContextUser.UserNameLastFM)}/library/artists?date_preset=ALL")
                 .WithFooter(footer));
             pageCounter++;
         }
@@ -263,14 +264,14 @@ public class CountryBuilders
 
         response.EmbedAuthor.WithName($"Top {timeSettings.Description.ToLower()} artist countries for {userTitle}");
         response.EmbedAuthor.WithUrl(
-            $"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library/artists?{timeSettings.UrlParameter}");
+            $"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library/artists?{timeSettings.UrlParameter}");
 
         Response<TopArtistList> artists;
         var previousTopArtists = new List<TopArtist>();
 
         if (!timeSettings.UsePlays && timeSettings.TimePeriod != TimePeriod.AllTime)
         {
-            artists = await this._lastFmRepository.GetTopArtistsAsync(userSettings.UserNameLastFm,
+            artists = await this._dataSourceFactory.GetTopArtistsAsync(userSettings.UserNameLastFm,
                 timeSettings, 1000);
 
             if (!artists.Success || artists.Content == null)
@@ -306,13 +307,14 @@ public class CountryBuilders
                 $"Please try again later or try a different time period.");
             response.Embed.WithColor(DiscordConstants.WarningColorOrange);
             response.CommandResponse = CommandResponse.NoScrobbles;
+            response.ResponseType = ResponseType.Embed;
             return response;
         }
 
         if (topListSettings.Billboard && timeSettings.BillboardStartDateTime.HasValue &&
             timeSettings.BillboardEndDateTime.HasValue)
         {
-            var previousArtistsCall = await this._lastFmRepository
+            var previousArtistsCall = await this._dataSourceFactory
                 .GetTopArtistsForCustomTimePeriodAsync(userSettings.UserNameLastFm,
                     timeSettings.BillboardStartDateTime.Value, timeSettings.BillboardEndDateTime.Value, 200);
 
@@ -339,7 +341,7 @@ public class CountryBuilders
             foreach (var country in countryPage)
             {
                 var name =
-                    $"**{country.CountryName ?? country.CountryCode}** ({country.UserPlaycount} {StringExtensions.GetPlaysString(country.UserPlaycount)})";
+                    $"**{country.CountryName ?? country.CountryCode}** - *{country.UserPlaycount} {StringExtensions.GetPlaysString(country.UserPlaycount)}*";
 
                 if (topListSettings.Billboard && previousTopCountries.Any())
                 {
@@ -414,14 +416,14 @@ public class CountryBuilders
 
         response.EmbedAuthor.WithName($"Top {timeSettings.Description.ToLower()} artist countries for {userTitle}");
         response.EmbedAuthor.WithUrl(
-            $"{Constants.LastFMUserUrl}{userSettings.UserNameLastFm}/library/artists?{timeSettings.UrlParameter}");
+            $"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library/artists?{timeSettings.UrlParameter}");
         response.Embed.WithAuthor(response.EmbedAuthor);
 
         Response<TopArtistList> artists;
 
         if (!timeSettings.UsePlays && timeSettings.TimePeriod != TimePeriod.AllTime)
         {
-            artists = await this._lastFmRepository.GetTopArtistsAsync(userSettings.UserNameLastFm,
+            artists = await this._dataSourceFactory.GetTopArtistsAsync(userSettings.UserNameLastFm,
                 timeSettings, 1000);
 
             if (!artists.Success || artists.Content == null)
