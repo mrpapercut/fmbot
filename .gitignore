@@ -22,6 +22,7 @@ ipch
 /src/FMBot_Discord/bin
 /src/.vs/FMBot_Discord/v16/Server/sqlite3
 config.json
+.env
 
 bin/
 obj/
