@@ -256,12 +256,12 @@ public class TimerService
 
     public async Task CheckForNewSupporters()
     {
-        await this._supporterService.CheckForNewSupporters();
+        // await this._supporterService.CheckForNewSupporters();
     }
 
     public async Task UpdateExistingSupporters()
     {
-        await this._supporterService.UpdateExistingOpenCollectiveSupporters();
+        // await this._supporterService.UpdateExistingOpenCollectiveSupporters();
     }
 
     public async Task UpdateDiscordSupporters()
