@@ -11,6 +11,7 @@ using Discord.Commands;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Models;
 using FMBot.Domain;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
@@ -24,6 +25,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Genius.Models.User;
+using User = FMBot.Persistence.Domain.Models.User;
 
 namespace FMBot.Bot.Services;
 
@@ -46,7 +48,7 @@ public class PlayService
         this._botSettings = botSettings.Value;
     }
 
-    public async Task<DailyOverview> GetDailyOverview(int userId, int amountOfDays)
+    public async Task<DailyOverview> GetDailyOverview(int userId, TimeZoneInfo timeZone, int amountOfDays)
     {
         try
         {
@@ -65,7 +67,7 @@ public class PlayService
             {
                 Days = plays
                     .OrderByDescending(o => o.TimePlayed)
-                    .GroupBy(g => g.TimePlayed.Date.AddHours(5))
+                    .GroupBy(g => TimeZoneInfo.ConvertTime(g.TimePlayed, timeZone).Date)
                     .Select(s => new DayOverview
                     {
                         Date = s.Key,
@@ -627,7 +629,7 @@ public class PlayService
             .ToList();
     }
 
-    public async Task<List<WhoKnowsObjectWithUser>> GetGuildUsersTotalPlaycount(ICommandContext context,
+    public async Task<List<WhoKnowsObjectWithUser>> GetGuildUsersTotalPlaycount(IGuild discordGuild,
         IDictionary<int, FullGuildUser> guildUsers,
         int guildId)
     {
@@ -642,16 +644,16 @@ public class PlayService
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var userAlbums = (await connection.QueryAsync<WhoKnowsAlbumDto>(sql, new
+        var userPlaycounts = (await connection.QueryAsync<WhoKnowsAlbumDto>(sql, new
         {
             guildId,
         })).ToList();
 
         var whoKnowsAlbumList = new List<WhoKnowsObjectWithUser>();
 
-        for (var i = 0; i < userAlbums.Count; i++)
+        for (var i = 0; i < userPlaycounts.Count; i++)
         {
-            var userAlbum = userAlbums[i];
+            var userAlbum = userPlaycounts[i];
 
             if (!guildUsers.TryGetValue(userAlbum.UserId, out var guildUser))
             {
@@ -662,7 +664,7 @@ public class PlayService
 
             if (i <= 10)
             {
-                var discordUser = await context.Guild.GetUserAsync(guildUser.DiscordUserId);
+                var discordUser = await discordGuild.GetUserAsync(guildUser.DiscordUserId, CacheMode.CacheOnly);
                 if (discordUser != null)
                 {
                     userName = discordUser.DisplayName;
@@ -824,9 +826,28 @@ public class PlayService
         return userPlays;
     }
 
+    public async Task<bool> UserHasImportedLastFm(int userId)
+    {
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        var plays = await PlayRepository.GetAllUserPlays(userId, connection);
+
+        if (!plays.Any() || plays.Count < 2000)
+        {
+            return false;
+        }
+
+        return plays
+            .Where(w => w.PlaySource == PlaySource.LastFm)
+            .GroupBy(g => g.TimePlayed.Date)
+            .Count(w => w.Count() > 2500) >= 7;
+    }
+
     public static bool UserHasImported(IEnumerable<UserPlay> userPlays)
     {
         return userPlays
+            .Where(w => w.PlaySource == PlaySource.LastFm)
             .GroupBy(g => g.TimePlayed.Date)
             .Count(w => w.Count() > 2500) >= 7;
     }
@@ -836,18 +857,72 @@ public class PlayService
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var plays = await PlayRepository.GetUserPlays(userId, connection, 9999999);
+        ICollection<UserPlay> plays;
 
         if (finalizeImport)
         {
             var importUser = await UserRepository.GetImportUserForUserId(userId, connection, true);
             if (importUser != null)
             {
-                plays = PlayDataSourceRepository.GetFinalUserPlays(importUser, plays);
+                plays = await PlayRepository.GetUserPlays(userId, connection, importUser.DataSource);
+            }
+            else
+            {
+                plays = await PlayRepository.GetAllUserPlays(userId, connection);
             }
         }
-
+        else
+        {
+            plays = await PlayRepository.GetAllUserPlays(userId, connection);
+        }
 
         return plays;
+    }
+
+    public async Task<RecentTrackList> AddUserPlaysToRecentTracks(int userId, RecentTrackList recentTracks, int limit = int.MaxValue)
+    {
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        var importUser = await UserRepository.GetImportUserForUserId(userId, connection, true);
+        var plays = await PlayRepository.GetUserPlays(userId, connection, importUser?.DataSource ?? DataSource.LastFm, limit);
+
+        var firstRecentTrack = recentTracks.RecentTracks
+            .Where(w => w.TimePlayed != null)
+            .MinBy(o => o.TimePlayed);
+
+        var playsToAdd = plays.Where(w => w.TimePlayed < firstRecentTrack.TimePlayed);
+
+        foreach (var play in playsToAdd)
+        {
+            recentTracks.RecentTracks.Add(UserPlayToRecentTrack(play));
+        }
+
+        if (limit == int.MaxValue)
+        {
+            recentTracks.TotalAmount = recentTracks.RecentTracks.Count;
+        }
+
+        recentTracks.RecentTracks = recentTracks.RecentTracks
+            .OrderByDescending(o => o.NowPlaying)
+            .ThenByDescending(o => o.TimePlayed)
+            .ToList();
+
+        return recentTracks;
+    }
+
+    private static RecentTrack UserPlayToRecentTrack(UserPlay userPlay)
+    {
+        return new RecentTrack
+        {
+            AlbumName = userPlay.AlbumName,
+            AlbumUrl = LastfmUrlExtensions.GetAlbumUrl(userPlay.ArtistName, userPlay.AlbumName),
+            ArtistName = userPlay.ArtistName,
+            ArtistUrl = LastfmUrlExtensions.GetArtistUrl(userPlay.ArtistName),
+            TrackName = userPlay.TrackName,
+            TrackUrl = LastfmUrlExtensions.GetTrackUrl(userPlay.ArtistName, userPlay.TrackName),
+            TimePlayed = userPlay.TimePlayed,
+            PlaySource = userPlay.PlaySource
+        };
     }
 }

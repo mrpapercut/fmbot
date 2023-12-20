@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Numerics;
 using System.Threading.Tasks;
 using Dapper;
 using Discord;
@@ -71,6 +70,20 @@ public class GuildService
             .FirstOrDefaultAsync(f => f.DiscordGuildId == discordGuildId);
     }
 
+    public async Task<Persistence.Domain.Models.Guild> GetGuildWithWebhooks(ulong? discordGuildId = null)
+    {
+        if (discordGuildId == null)
+        {
+            return null;
+        }
+
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        return await db.Guilds
+            .Include(i => i.Channels)
+            .Include(i => i.Webhooks)
+            .FirstOrDefaultAsync(f => f.DiscordGuildId == discordGuildId);
+    }
+
     public async Task<Persistence.Domain.Models.Guild> GetGuildForWhoKnows(ulong? discordGuildId = null)
     {
         if (discordGuildId == null)
@@ -108,7 +121,6 @@ public class GuildService
         }
 
         const string sql = "SELECT gu.user_id, " +
-                           "gu.guild_id, " +
                            "gu.user_name, " +
                            "gu.bot, " +
                            "gu.last_message, " +
@@ -165,23 +177,15 @@ public class GuildService
         }
     }
 
-    private async Task RemoveGuildFromCache(ulong discordGuildId)
+    private Task RemoveGuildFromCache(ulong discordGuildId)
     {
         this._cache.Remove(CacheKeyForGuild(discordGuildId));
-
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        var guild = await db.Guilds
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.DiscordGuildId == discordGuildId);
-        if (guild != null)
-        {
-            this._cache.Remove($"guild-alltime-top-artists-{guild.GuildId}");
-        }
+        return Task.CompletedTask;
     }
 
     private static string CacheKeyForGuild(ulong discordGuildId)
     {
-        return $"guild-full-{discordGuildId}";
+        return $"guild-{discordGuildId}";
     }
 
     public static (FilterStats Stats, IDictionary<int, FullGuildUser> FilteredGuildUsers) FilterGuildUsers(
@@ -288,25 +292,6 @@ public class GuildService
     {
         return guild.GuildUsers
             .FirstOrDefault(f => f.UserId == userId);
-    }
-
-    // Get all guild users
-    public async Task<List<UserExportModel>> FindAllUsersFromGuildAsync(IGuild discordGuild)
-    {
-        var users = await discordGuild.GetUsersAsync();
-
-        var userIds = users.Select(s => s.Id).ToList();
-
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        var usersObject = db.Users
-            .AsNoTracking()
-            .Where(w => userIds.Contains(w.DiscordUserId))
-            .Select(s =>
-                new UserExportModel(
-                    s.DiscordUserId.ToString(),
-                    s.UserNameLastFM));
-
-        return usersObject.ToList();
     }
 
     public async Task StaleGuildLastIndexedAsync(IGuild discordGuild)
@@ -439,52 +424,6 @@ public class GuildService
         await db.SaveChangesAsync();
 
         await RemoveGuildFromCache(discordGuild.Id);
-    }
-
-    public async Task<bool?> ToggleSupporterMessagesAsync(IGuild discordGuild)
-    {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        var existingGuild = await db.Guilds
-            .AsQueryable()
-            .FirstOrDefaultAsync(f => f.DiscordGuildId == discordGuild.Id);
-
-        if (existingGuild == null)
-        {
-            var newGuild = new Persistence.Domain.Models.Guild
-            {
-                DiscordGuildId = discordGuild.Id,
-                Name = discordGuild.Name,
-                DisableSupporterMessages = true
-            };
-
-            await db.Guilds.AddAsync(newGuild);
-
-            await db.SaveChangesAsync();
-
-            await RemoveGuildFromCache(discordGuild.Id);
-
-            return true;
-        }
-        else
-        {
-            existingGuild.Name = discordGuild.Name;
-            if (existingGuild.DisableSupporterMessages == true)
-            {
-                existingGuild.DisableSupporterMessages = false;
-            }
-            else
-            {
-                existingGuild.DisableSupporterMessages = true;
-            }
-
-            db.Entry(existingGuild).State = EntityState.Modified;
-
-            await db.SaveChangesAsync();
-
-            await RemoveGuildFromCache(discordGuild.Id);
-
-            return existingGuild.DisableSupporterMessages;
-        }
     }
 
     public async Task<bool?> ToggleCrownsAsync(IGuild discordGuild)
@@ -972,6 +911,41 @@ public class GuildService
         await db.SaveChangesAsync();
     }
 
+    public async Task SetChannelEmbedType(IChannel discordChannel, int guildId, FmEmbedType? embedType, ulong discordGuildId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var existingChannel = await db.Channels
+            .AsQueryable()
+            .FirstOrDefaultAsync(f => f.DiscordChannelId == discordChannel.Id);
+
+        if (existingChannel == null)
+        {
+            var newChannel = new Channel
+            {
+                DiscordChannelId = discordChannel.Id,
+                Name = discordChannel.Name,
+                GuildId = guildId,
+                FmEmbedType = embedType
+            };
+
+            await db.Channels.AddAsync(newChannel);
+            await db.SaveChangesAsync();
+
+            await RemoveGuildFromCache(discordGuildId);
+
+            return;
+        }
+
+        existingChannel.Name = existingChannel.Name;
+        existingChannel.FmEmbedType = embedType;
+
+        db.Entry(existingChannel).State = EntityState.Modified;
+
+        await RemoveGuildFromCache(discordGuildId);
+
+        await db.SaveChangesAsync();
+    }
+
     public async Task<string[]> EnableChannelCommandsAsync(IChannel discordChannel, List<string> commands, ulong discordGuildId)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -1118,12 +1092,24 @@ public class GuildService
 
     public async Task<DateTime?> GetGuildIndexTimestampAsync(IGuild discordGuild)
     {
+        var discordGuildIdCacheKey = CacheKeyForGuild(discordGuild.Id);
+
+        if (this._cache.TryGetValue(discordGuildIdCacheKey, out Persistence.Domain.Models.Guild guild))
+        {
+            return guild?.LastIndexed;
+        }
+
         await using var db = await this._contextFactory.CreateDbContextAsync();
-        var existingGuild = await db.Guilds
+        guild = await db.Guilds
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.DiscordGuildId == discordGuild.Id);
 
-        return existingGuild?.LastIndexed;
+        if (guild?.LastIndexed != null && guild.LastIndexed > DateTime.UtcNow.AddDays(-120))
+        {
+            this._cache.Set(discordGuildIdCacheKey, guild, TimeSpan.FromHours(1));
+        }
+
+        return guild?.LastIndexed;
     }
 
     public async Task UpdateGuildIndexTimestampAsync(IGuild discordGuild, DateTime? timestamp = null)
@@ -1165,7 +1151,7 @@ public class GuildService
     {
         foreach (var emote in emoteString)
         {
-            if (emote.Length is 2 or 3)
+            if (emote.Length is 1 or 2 or 3)
             {
                 try
                 {
@@ -1217,7 +1203,7 @@ public class GuildService
     {
         foreach (var emoteString in reactions)
         {
-            if (emoteString.Length is 2 or 3)
+            if (emoteString.Length is 1 or 2 or 3)
             {
                 var emote = new Emoji(emoteString);
                 await message.AddReactionAsync(emote);

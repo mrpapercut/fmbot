@@ -66,14 +66,14 @@ public class TrackSlashCommands : InteractionModuleBase
     public async Task WhoKnowsTrackAsync(
         [Summary("Track", "The track your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(TrackAutoComplete))] string name = null,
-        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Mode", "The type of response you want - change default with /responsemode")] ResponseMode? mode = null,
         [Summary("Role-picker", "Display a rolepicker to filter with roles")] bool displayRoleFilter = false)
     {
         _ = DeferAsync();
 
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-        mode ??= contextUser.Mode ?? WhoKnowsMode.Embed;
+        mode ??= contextUser.Mode ?? ResponseMode.Embed;
 
         try
         {
@@ -110,7 +110,7 @@ public class TrackSlashCommands : InteractionModuleBase
 
         try
         {
-            var response = await this._trackBuilders.WhoKnowsTrackAsync(new ContextModel(this.Context, contextUser), WhoKnowsMode.Embed, $"{track.ArtistName} | {track.Name}", true, roleIds);
+            var response = await this._trackBuilders.WhoKnowsTrackAsync(new ContextModel(this.Context, contextUser), ResponseMode.Embed, $"{track.ArtistName} | {track.Name}", true, roleIds);
 
             await this.Context.UpdateInteractionEmbed(response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -126,14 +126,14 @@ public class TrackSlashCommands : InteractionModuleBase
     public async Task FriendsWhoKnowAlbumAsync(
         [Summary("Track", "The track your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(TrackAutoComplete))] string name = null,
-        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Mode", "The type of response you want - change default with /responsemode")] ResponseMode? mode = null,
         [Summary("Private", "Only show response to you")] bool privateResponse = false)
     {
         _ = DeferAsync(privateResponse);
 
         var contextUser = await this._userService.GetUserWithFriendsAsync(this.Context.User);
 
-        mode ??= contextUser.Mode ?? WhoKnowsMode.Embed;
+        mode ??= contextUser.Mode ?? ResponseMode.Embed;
 
         try
         {
@@ -153,7 +153,7 @@ public class TrackSlashCommands : InteractionModuleBase
     public async Task GlobalWhoKnowsTrackAsync(
         [Summary("Track", "The track your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(TrackAutoComplete))] string name = null,
-        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Mode", "The type of response you want - change default with /responsemode")] ResponseMode? mode = null,
         [Summary("Hide-private", "Hide or show private users")] bool hidePrivate = false)
     {
         _ = DeferAsync();
@@ -166,7 +166,7 @@ public class TrackSlashCommands : InteractionModuleBase
             ShowBotters = false,
             AdminView = false,
             NewSearchValue = name,
-            WhoKnowsMode = mode ?? contextUser.Mode ?? WhoKnowsMode.Embed
+            ResponseMode = mode ?? contextUser.Mode ?? ResponseMode.Embed
         };
 
         try
@@ -198,6 +198,29 @@ public class TrackSlashCommands : InteractionModuleBase
         try
         {
             var response = await this._trackBuilders.TrackPlays(new ContextModel(this.Context, contextUser), userSettings, name);
+
+            await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [SlashCommand("trackdetails", "Shows metadata details for current track or the one you're searching for.")]
+    [UsernameSetRequired]
+    public async Task TrackDetailsAsync(
+        [Summary("Track", "The track your want to search for (defaults to currently playing)")]
+        [Autocomplete(typeof(TrackAutoComplete))] string name = null)
+    {
+        _ = DeferAsync();
+
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        try
+        {
+            var response = await this._trackBuilders.TrackDetails(new ContextModel(this.Context, contextUser), name);
 
             await this.Context.SendFollowUpResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);

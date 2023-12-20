@@ -21,6 +21,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Serilog;
+using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
 using User = FMBot.Persistence.Domain.Models.User;
 
 namespace FMBot.Bot.Services;
@@ -98,9 +99,14 @@ public class SupporterService
         return null;
     }
 
+    public static bool IsSupporter(UserType userType)
+    {
+        return userType != UserType.User;
+    }
+
     public bool ShowPromotionalMessage(UserType userType, ulong? guildId)
     {
-        if (userType != UserType.User)
+        if (IsSupporter(userType))
         {
             return false;
         }
@@ -116,17 +122,6 @@ public class SupporterService
         return true;
     }
 
-    public static string GetSupporterLink()
-    {
-        var pick = RandomNumberGenerator.GetInt32(0, 2);
-
-        return pick switch
-        {
-            1 => Constants.GetSupporterDiscordLink,
-            _ => Constants.GetSupporterOverviewLink,
-        };
-    }
-
     public static async Task SendSupporterWelcomeMessage(IUser discordUser, bool hasDiscogs, Supporter supporter)
     {
         var thankYouEmbed = new EmbedBuilder();
@@ -134,7 +129,7 @@ public class SupporterService
 
         var thankYouMessage = new StringBuilder();
 
-        if (supporter.SubscriptionType != SubscriptionType.Discord)
+        if (supporter != null && supporter.SubscriptionType != SubscriptionType.Discord)
         {
             thankYouMessage.AppendLine($"**Thank you for getting .fmbot {supporter.SubscriptionType.ToString().ToLower()} supporter!**");
         }
@@ -143,42 +138,59 @@ public class SupporterService
             thankYouMessage.AppendLine($"**Thank you for getting .fmbot supporter!**");
         }
 
-        thankYouMessage.AppendLine(supporter.SubscriptionType == SubscriptionType.Lifetime
-            ? "Thanks to your purchase we can continue to improve and host the bot, while you get some nice perks in return. Here's a brief reminder of the features available to supporters:"
-            : "Thanks to your subscription we can continue to improve and host the bot, while you get some nice perks in return. Here's a brief reminder of the features available to supporters:");
+        if (supporter != null && supporter.SubscriptionType == SubscriptionType.Lifetime)
+        {
+            thankYouMessage.AppendLine("Thanks to your purchase we can continue to improve and keep the bot running while you get some nice perks in return. Here's an overview of the new features that are now available to you:");
+        }
+        else
+        {
+            thankYouMessage.AppendLine("Thanks to your subscription we can continue to improve and keep the bot running while you get some nice perks in return. Here's an overview of the new features that are now available to you:");
+        }
 
         thankYouMessage.AppendLine();
-        thankYouMessage.AppendLine("**Expanded statistics**\n" +
-                                   "We've started a full update for you. " +
-                                   "After a few minutes the following commands should be expanded:\n" +
-                                   "- `artist`, `album` and `track` with first listen dates\n" +
-                                   "- `stats` command with overall history\n" +
-                                   "- `year` with artist discoveries and monthly overview");
+        thankYouMessage.AppendLine("<:history:1131511469096312914> **Import your Spotify**");
+        thankYouMessage.AppendLine("- Import and use your full Spotify history");
+        thankYouMessage.AppendLine("- Use `/import Spotify` to get started");
+        thankYouMessage.AppendLine("- Use `/import manage` to configure how your data is combined with Last.fm");
         thankYouMessage.AppendLine();
-        thankYouMessage.AppendLine("**Expanded commands**\n" +
-                                   "- `fm` footer with up to 8 + 1 options (configured with `/fmmode`)\n" +
-                                   "- Your own personal `fm` reactions with `userreactions`\n" +
-                                   "- Use the `judge` command up to 25 times a day and on others\n" +
-                                   $"- Friend limit raised to {Constants.MaxFriendsSupporter} (up from {Constants.MaxFriends})");
-
+        thankYouMessage.AppendLine("📈 **More stats and expanded commands**");
+        thankYouMessage.AppendLine("- `toptracks timelistened` with the most accurate listening time" );
+        thankYouMessage.AppendLine("- `year` with an extra page");
+        thankYouMessage.AppendLine("- `stats` command with listening times and a yearly overview");
+        thankYouMessage.AppendLine("- `recent` with your lifetime play history");
         thankYouMessage.AppendLine();
-        thankYouMessage.AppendLine("**Get featured**\n" +
-                                   "Every first Sunday of the month is Supporter Sunday, where you have a higher chance of getting featured. " +
+        thankYouMessage.AppendLine("<:discoveries:1145740579284713512> **Go back in time**");
+        thankYouMessage.AppendLine("- View when you discovered artists with the exclusive `discoveries` command");
+        thankYouMessage.AppendLine("- See discovery dates in `artist`, `album` and `track`");
+        thankYouMessage.AppendLine();
+        thankYouMessage.AppendLine("⚙️ **Customize your commands**");
+        var modeCommand = PublicProperties.SlashCommands.ContainsKey("fmmode") ? $"</fmmode:{PublicProperties.SlashCommands["fmmode"]}>" : "`/fmmode`";
+        thankYouMessage.AppendLine($"- Expand your `fm` footer with more and exclusive options. ({modeCommand})");
+        thankYouMessage.AppendLine($"- Set your own personal emote reactions with `.userreactions`");
+        thankYouMessage.AppendLine("- Use the `judge` command with GPT-4 up to 15 times a day and on others");
+        thankYouMessage.AppendLine($"- Friend limit raised to {Constants.MaxFriendsSupporter} (up from {Constants.MaxFriends})");
+        thankYouMessage.AppendLine();
+        thankYouMessage.AppendLine("⭐ **Get featured**");
+        thankYouMessage.AppendLine("Every first Sunday of the month is Supporter Sunday, where you have a higher chance of getting featured. " +
                                    $"The next Supporter Sunday is in {FeaturedService.GetDaysUntilNextSupporterSunday()} {StringExtensions.GetDaysString(FeaturedService.GetDaysUntilNextSupporterSunday())}.");
 
         if (hasDiscogs)
         {
             thankYouMessage.AppendLine();
-            thankYouMessage.AppendLine("**View your full Discogs collection**\n" +
+            thankYouMessage.AppendLine("<:vinyl:1043644602969763861> **View your full Discogs collection**\n" +
                                        "If you use the `collection` command it will fetch your full collection from Discogs.\n" +
                                        $"This is also visible in other commands, like `artist`, `album`, `track` and `stats`.");
         }
 
         thankYouMessage.AppendLine();
-        thankYouMessage.Append("**Your info**\n" +
-                                   $"Your name in the `supporters` command will be shown as `{supporter.Name}`. This is also the name that will be shown when you sponsor charts. ");
 
-        if (supporter.OpenCollectiveId != null)
+        if (supporter != null)
+        {
+            thankYouMessage.Append("ℹ️ **Your info**\n" +
+                                   $"Your name in the `supporters` command will be shown as `{supporter.Name}`. This is also the name that will be shown when you sponsor charts. ");
+        }
+        
+        if (supporter?.OpenCollectiveId != null)
         {
             thankYouMessage.Append("You can update this through your OpenCollective settings.");
         }
@@ -187,7 +199,7 @@ public class SupporterService
         await discordUser.SendMessageAsync(embed: thankYouEmbed.Build());
     }
 
-    public static async Task SendSupporterGoodbyeMessage(IUser discordUser, bool openCollective = true)
+    public static async Task SendSupporterGoodbyeMessage(IUser discordUser, bool openCollective = true, bool hadImported = false)
     {
         var goodbyeEmbed = new EmbedBuilder();
         goodbyeEmbed.WithColor(DiscordConstants.InformationColorBlue);
@@ -200,6 +212,12 @@ public class SupporterService
         if (openCollective)
         {
             goodbyeMessage.AppendLine("If you ever want to come back in the future you can re-subscribe through the same OpenCollective account. Your supporter will then be automatically re-activated.");
+            goodbyeMessage.AppendLine();
+        }
+
+        if (hadImported)
+        {
+            goodbyeMessage.AppendLine("You have been moved back to using Last.fm without imports as your data source. Your imports are however saved and will be available again if you resubscribe in the future.");
             goodbyeMessage.AppendLine();
         }
 
@@ -224,20 +242,20 @@ public class SupporterService
             return null;
         }
 
-        var randomHintNumber = new Random().Next(0, 30);
+        var randomHintNumber = new Random().Next(0, 40);
 
         switch (randomHintNumber)
         {
             case 1:
                 SetGuildPromoCache(guildId);
-                return  
+                return
                     $"*.fmbot stores all artists/albums/tracks instead of just the top 4/5/6k for supporters. " +
-                    $"[See all the benefits of becoming a supporter here.]({GetSupporterLink()})*";
-            case 2: 
+                    $"[See all the benefits of becoming a supporter here.]({Constants.GetSupporterDiscordLink})*";
+            case 2:
                 SetGuildPromoCache(guildId);
                 return
-                    $"*Supporters get extra statistics like first listen dates, full history in `stats`, artist discoveries in `year`, extra options in their `fm` footer and more. " +
-                    $"[See all the perks of getting supporter here.]({GetSupporterLink()})*";
+                    $"*Supporters get extra statistics like discovery dates, full history in `stats`, artist discoveries in `year`, extra options in their `fm` footer and more. " +
+                    $"[See all the perks of getting supporter here.]({Constants.GetSupporterDiscordLink})*";
             case 3:
                 {
                     await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -263,21 +281,22 @@ public class SupporterService
                     SetGuildPromoCache(guildId);
                     return
                         $"*Want more custom options in your `{prfx}fm` footer? Supporters can set up to 8 + 1 options. " +
-                        $"[Get .fmbot supporter here.]({GetSupporterLink()})*";
+                        $"[Get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*";
                 }
             case 5:
                 {
                     SetGuildPromoCache(guildId);
                     return
                         $"*Supporters get an improved GPT-4 powered `{prfx}judge` command. They also get higher usage limits and the ability to use the command on others. " +
-                        $"[Get .fmbot supporter here.]({GetSupporterLink()})*";
+                        $"[Get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*";
                 }
             case 6:
+            case 7:
                 {
                     SetGuildPromoCache(guildId);
                     return
-                        $"*Supporters can now import their full Spotify history into the bot. " +
-                        $"[Get .fmbot supporter here.]({GetSupporterLink()})*";
+                        $"*Supporters can now import and use their full Spotify history in the bot. " +
+                        $"[Get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*";
                 }
             default:
                 return null;
@@ -428,7 +447,7 @@ public class SupporterService
         return supporter;
     }
 
-    public async Task CheckForNewSupporters()
+    public async Task CheckForNewOcSupporters()
     {
         var openCollectiveSupporters = await this._openCollectiveService.GetOpenCollectiveOverview();
 
@@ -472,6 +491,11 @@ public class SupporterService
                 return;
             }
             if (existingSupporter != null)
+            {
+                return;
+            }
+
+            if (newSupporter.Transactions.Count > 3)
             {
                 return;
             }
@@ -657,22 +681,69 @@ public class SupporterService
         return await this._discordSkuService.GetEntitlements();
     }
 
-    public async Task UpdateDiscordSupporters()
+    public async Task UpdateSingleDiscordSupporter(ulong discordUserId)
     {
-        var discordSupporters = await this._discordSkuService.GetEntitlements();
+        var discordSupporters = await this._discordSkuService.GetEntitlements(discordUserId);
 
+        await UpdateDiscordSupporters(discordSupporters);
+    }
+
+    public async Task AddLatestDiscordSupporters()
+    {
+        var discordSupporters = await this._discordSkuService.GetEntitlements(after: SnowflakeUtils.ToSnowflake(DateTime.UtcNow.AddDays(-2)));
+
+        await UpdateDiscordSupporters(discordSupporters);
+    }
+
+    public async Task UpdateGenerallyAllDiscordSupporters()
+    {
+        var discordSupporters = await this._discordSkuService.GetEntitlements(before: SnowflakeUtils.ToSnowflake(DateTime.UtcNow.AddDays(-1)));
+
+        await UpdateDiscordSupporters(discordSupporters);
+    }
+
+    public async Task UpdateAllDiscordSupporters()
+    {
+        var discordSupporters = new List<DiscordEntitlementResponseModel>();
+
+        for (var i = 0; i < 60; i++)
+        {
+            discordSupporters.AddRange(await this._discordSkuService.GetEntitlementsFromDiscord(
+                before: SnowflakeUtils.ToSnowflake(DateTimeOffset.UtcNow.AddDays(-i)),
+                after: SnowflakeUtils.ToSnowflake(DateTimeOffset.UtcNow.AddDays(-(i + 1)))));
+
+            await Task.Delay(100);
+        }
+
+        var result = DiscordSkuService.DiscordEntitlementsToGrouped(discordSupporters);
+
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var existingSupporters = db.Supporters
+            .Where(w =>
+                w.DiscordUserId != null &&
+                w.SubscriptionType == SubscriptionType.Discord)
+            .OrderByDescending(o => o.LastPayment)
+            .Select(s => s.DiscordUserId.Value)
+            .Distinct()
+            .ToHashSet();
+
+        var resultIds = result.Select(s => s.DiscordUserId).ToHashSet();
+        foreach (var existingSupporter in existingSupporters.Where(w => !resultIds.Contains(w)))
+        {
+            Log.Information("Found Discord supporter without entitlement - {discordUserId}", existingSupporter);
+        }
+
+        await UpdateDiscordSupporters(result);
+    }
+
+    public async Task UpdateDiscordSupporters(List<DiscordEntitlement> discordSupporters)
+    {
         await using var db = await this._contextFactory.CreateDbContextAsync();
         var existingSupporters = await db.Supporters
             .Where(w =>
                 w.DiscordUserId != null &&
                 w.SubscriptionType == SubscriptionType.Discord)
             .ToListAsync();
-
-        var discordUsersLeft = existingSupporters
-            .OrderByDescending(o => o.LastPayment)
-            .Select(s => s.DiscordUserId.Value)
-            .Distinct()
-            .ToHashSet();
 
         foreach (var discordSupporter in discordSupporters)
         {
@@ -690,10 +761,15 @@ public class SupporterService
                 var user = await this._client.Rest.GetUserAsync(discordSupporter.DiscordUserId);
                 if (user != null)
                 {
-                    await SendSupporterWelcomeMessage(user, false, newSupporter);
+                    try
+                    {
+                        await SendSupporterWelcomeMessage(user, false, newSupporter);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Error("Could not send welcome dm to new Discord supporter {discordUserId}", discordSupporter.DiscordUserId);
+                    }
                 }
-
-                discordUsersLeft.Remove(discordSupporter.DiscordUserId);
 
                 var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
                 var embed = new EmbedBuilder().WithDescription(
@@ -707,11 +783,10 @@ public class SupporterService
 
             if (existingSupporter != null)
             {
-                discordUsersLeft.Remove(discordSupporter.DiscordUserId);
-
                 if (existingSupporter.LastPayment != discordSupporter.EndsAt && existingSupporter.Expired != true)
                 {
                     Log.Information("Updating Discord supporter {discordUserId}", discordSupporter.DiscordUserId);
+                    var oldDate = existingSupporter.LastPayment;
 
                     existingSupporter.LastPayment = discordSupporter.EndsAt;
                     db.Update(existingSupporter);
@@ -719,7 +794,8 @@ public class SupporterService
 
                     var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
                     var embed = new EmbedBuilder().WithDescription(
-                        $"Updated Discord supporter {discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>");
+                        $"Updated Discord supporter {discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>\n" +
+                        $"*End date from <t:{((DateTimeOffset?)oldDate)?.ToUnixTimeSeconds()}:f> to <t:{((DateTimeOffset?)discordSupporter.EndsAt)?.ToUnixTimeSeconds()}:f>*");
                     await supporterAuditLogChannel.SendMessageAsync(embeds: new[] { embed.Build() });
                 }
 
@@ -737,8 +813,6 @@ public class SupporterService
                         await SendSupporterWelcomeMessage(user, false, reActivatedSupporter);
                     }
 
-                    discordUsersLeft.Remove(discordSupporter.DiscordUserId);
-
                     var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
                     var embed = new EmbedBuilder().WithDescription(
                         $"Re-activated Discord supporter {discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>");
@@ -751,7 +825,34 @@ public class SupporterService
 
                 if (existingSupporter.Expired != true && !discordSupporter.Active)
                 {
+                    var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
+
+                    var ocSupporter = await db.Supporters
+                        .Where(w =>
+                            w.DiscordUserId != null &&
+                            w.SubscriptionType != SubscriptionType.Discord &&
+                            w.Expired != true)
+                        .FirstOrDefaultAsync(f => f.DiscordUserId == existingSupporter.DiscordUserId.Value);
+
+                    if (ocSupporter != null)
+                    {
+                        Log.Information("Not removing Discord supporter because active OC sub - {discordUserId}", discordSupporter.DiscordUserId);
+
+                        var notCancellingEmbed = new EmbedBuilder().WithDescription(
+                            $"Prevented removal of Discord supporter who also has active OpenCollective sub\n" +
+                            $"{discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>");
+                        await supporterAuditLogChannel.SendMessageAsync(embeds: new[] { notCancellingEmbed.Build() });
+                        await ExpireSupporter(discordSupporter.DiscordUserId, existingSupporter, false);
+
+                        continue;
+                    }
+
                     Log.Information("Removing Discord supporter {discordUserId}", discordSupporter.DiscordUserId);
+
+                    var fmbotUser = await
+                        db.Users.FirstOrDefaultAsync(f => f.DiscordUserId == discordSupporter.DiscordUserId);
+
+                    var hadImported = fmbotUser != null && fmbotUser.DataSource != DataSource.LastFm;
 
                     await ExpireSupporter(discordSupporter.DiscordUserId, existingSupporter);
                     await ModifyGuildRole(discordSupporter.DiscordUserId, false);
@@ -760,10 +861,9 @@ public class SupporterService
                     var user = await this._client.Rest.GetUserAsync(discordSupporter.DiscordUserId);
                     if (user != null)
                     {
-                        await SendSupporterGoodbyeMessage(user, false);
+                        await SendSupporterGoodbyeMessage(user, false, hadImported);
                     }
 
-                    var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
                     var embed = new EmbedBuilder().WithDescription(
                         $"Removed Discord supporter {discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>");
                     await supporterAuditLogChannel.SendMessageAsync(embeds: new[] { embed.Build() });
@@ -772,10 +872,138 @@ public class SupporterService
                 }
             }
         }
+    }
 
-        if (discordUsersLeft.Any())
+    public async Task CheckExpiredDiscordSupporters()
+    {
+        var expiredDate = DateTime.UtcNow.AddDays(-3);
+
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var possiblyExpiredSupporters = await db.Supporters
+            .Where(w =>
+                w.DiscordUserId != null &&
+                w.SubscriptionType == SubscriptionType.Discord &&
+                w.Expired != true &&
+                w.LastPayment.HasValue &&
+                w.LastPayment.Value < expiredDate)
+            .ToListAsync();
+
+        foreach (var existingSupporter in possiblyExpiredSupporters)
         {
-            Log.Warning("Found {count} Discord supporters without attached entitlement", discordUsersLeft.Count);
+            var discordSupporters = await this._discordSkuService.GetEntitlements(existingSupporter.DiscordUserId.Value);
+
+            var discordSupporter = discordSupporters.FirstOrDefault();
+
+            if (discordSupporter == null)
+            {
+                Log.Information("Expired Discord supporter is not found in Discord API - {discordUserId}", existingSupporter.DiscordUserId);
+                continue;
+            }
+
+            if (existingSupporter.LastPayment != discordSupporter.EndsAt)
+            {
+                Log.Information("Updating Discord supporter {discordUserId}", discordSupporter.DiscordUserId);
+
+                var oldDate = existingSupporter.LastPayment;
+
+                existingSupporter.LastPayment = discordSupporter.EndsAt;
+                db.Update(existingSupporter);
+                await db.SaveChangesAsync();
+
+                var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
+                var embed = new EmbedBuilder().WithDescription(
+                    $"Updated Discord supporter {discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>\n" +
+                    $"*End date from <t:{((DateTimeOffset?)oldDate)?.ToUnixTimeSeconds()}:f> to <t:{((DateTimeOffset?)discordSupporter.EndsAt)?.ToUnixTimeSeconds()}:f>*");
+                await supporterAuditLogChannel.SendMessageAsync(embeds: new[] { embed.Build() });
+            }
+
+            if (existingSupporter.Expired != true && !discordSupporter.Active)
+            {
+                var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
+
+                var ocSupporter = await db.Supporters
+                    .Where(w =>
+                        w.DiscordUserId != null &&
+                        w.SubscriptionType != SubscriptionType.Discord &&
+                        w.Expired != true)
+                    .FirstOrDefaultAsync(f => f.DiscordUserId == existingSupporter.DiscordUserId.Value);
+
+                if (ocSupporter != null)
+                {
+                    Log.Information("Not removing Discord supporter because active OC sub - {discordUserId}", discordSupporter.DiscordUserId);
+
+                    var notCancellingEmbed = new EmbedBuilder().WithDescription(
+                        $"Prevented removal of Discord supporter who also has active OpenCollective sub\n" +
+                        $"{discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>");
+                    await supporterAuditLogChannel.SendMessageAsync(embeds: new[] { notCancellingEmbed.Build() });
+                    await ExpireSupporter(discordSupporter.DiscordUserId, existingSupporter, false);
+
+                    continue;
+                }
+
+                Log.Information("Removing Discord supporter {discordUserId}", discordSupporter.DiscordUserId);
+
+                var fmbotUser = await
+                    db.Users.FirstOrDefaultAsync(f => f.DiscordUserId == discordSupporter.DiscordUserId);
+
+                var hadImported = fmbotUser != null && fmbotUser.DataSource != DataSource.LastFm;
+
+                await ExpireSupporter(discordSupporter.DiscordUserId, existingSupporter);
+                await ModifyGuildRole(discordSupporter.DiscordUserId, false);
+                await RunFullUpdate(discordSupporter.DiscordUserId);
+
+                var user = await this._client.Rest.GetUserAsync(discordSupporter.DiscordUserId);
+                if (user != null)
+                {
+                    await SendSupporterGoodbyeMessage(user, false, hadImported);
+                }
+
+                var embed = new EmbedBuilder().WithDescription(
+                    $"Removed Discord supporter {discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>");
+                await supporterAuditLogChannel.SendMessageAsync(embeds: new[] { embed.Build() });
+
+                Log.Information("Removed Discord supporter {discordUserId}", discordSupporter.DiscordUserId);
+            }
+
+            await Task.Delay(500);
+        }
+    }
+
+    public async Task CheckIfDiscordSupportersHaveCorrectUserType()
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var activeSupporters = await db.Supporters
+            .AsQueryable()
+            .Where(w =>
+                w.DiscordUserId != null &&
+                w.SubscriptionType == SubscriptionType.Discord &&
+                w.Expired != true)
+            .ToListAsync();
+
+        var ids = activeSupporters.Select(s => s.DiscordUserId.Value).ToHashSet();
+        var usersThatShouldHaveSupporter = await db.Users
+            .Where(w => ids.Contains(w.DiscordUserId) && w.UserType == UserType.User)
+            .ToListAsync();
+
+        Log.Information("Found {supporterCount} Discord supporters that should have supporter, but don't have the usertype", usersThatShouldHaveSupporter.Count);
+
+        foreach (var dbUser in usersThatShouldHaveSupporter)
+        {
+            var discordSupporter = activeSupporters.First(f => f.DiscordUserId == dbUser.DiscordUserId);
+
+            Log.Information("Re-activating Discord supporter (user was missing type) {discordUserId}", discordSupporter.DiscordUserId);
+
+            await ReActivateSupporterUser(discordSupporter);
+            await ModifyGuildRole(discordSupporter.DiscordUserId.Value);
+            await RunFullUpdate(discordSupporter.DiscordUserId.Value);
+
+            var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
+            var embed = new EmbedBuilder().WithDescription(
+                $"Re-activated Discord supporter {discordSupporter.DiscordUserId} - <@{discordSupporter.DiscordUserId}>\n" +
+                $"*User had an active subscription, but their .fmbot account didn't have supporter*");
+            await supporterAuditLogChannel.SendMessageAsync(embeds: new[] { embed.Build() });
+
+            Log.Information("Re-activated Discord supporter (user was missing type) {discordUserId}", discordSupporter.DiscordUserId);
         }
     }
 
@@ -892,7 +1120,33 @@ public class SupporterService
         return supporter;
     }
 
-    private async Task ExpireSupporter(ulong id, Supporter supporter)
+    private async Task<Supporter> ReActivateSupporterUser(Supporter supporter)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var user = await db.Users
+            .AsQueryable()
+            .FirstOrDefaultAsync(f => f.DiscordUserId == supporter.DiscordUserId.Value);
+
+        if (user == null)
+        {
+            Log.Warning("Someone who isn't registered in .fmbot just re-activated their Discord subscription - ID {discordUserId}", supporter.DiscordUserId);
+        }
+        else
+        {
+            if (user.UserType == UserType.User)
+            {
+                user.UserType = UserType.Supporter;
+            }
+
+            db.Update(user);
+        }
+
+        await db.SaveChangesAsync();
+
+        return supporter;
+    }
+
+    private async Task ExpireSupporter(ulong id, Supporter supporter, bool removeSupporterStatus = true)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
         var user = await db.Users
@@ -903,7 +1157,7 @@ public class SupporterService
         {
             Log.Warning("Someone who isn't registered in .fmbot just cancelled their Discord subscription - ID {discordUserId}", id);
         }
-        else
+        else if (removeSupporterStatus)
         {
             if (user.UserType == UserType.Supporter)
             {
@@ -913,10 +1167,14 @@ public class SupporterService
             if (user.DataSource != DataSource.LastFm)
             {
                 user.DataSource = DataSource.LastFm;
-                _ = this._indexService.RecalculateTopLists(user);
+                _ = Task.Run(() => this._indexService.RecalculateTopLists(user));
             }
 
             db.Update(user);
+        }
+        else
+        {
+            Log.Information("Expiring Discord supporter without removing supporter status from account - ID {discordUserId}", id);
         }
 
         supporter.Expired = true;
@@ -948,6 +1206,14 @@ public class SupporterService
             .Where(w => w.Expired != true)
             .OrderByDescending(o => o.Created)
             .ToListAsync();
+    }
+
+    public async Task<int> GetActiveSupporterCountAsync()
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        return await db.Supporters
+            .AsQueryable()
+            .CountAsync(c => c.Expired != true);
     }
 
     public async Task<IReadOnlyList<Supporter>> GetAllSupporters()

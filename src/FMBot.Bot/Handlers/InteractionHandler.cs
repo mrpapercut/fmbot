@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using Discord;
 using Discord.Interactions;
@@ -16,6 +15,7 @@ using FMBot.Bot.Services.Guild;
 using FMBot.Domain;
 using FMBot.Domain.Models;
 using Microsoft.Extensions.Caching.Memory;
+using Prometheus;
 using Serilog;
 
 namespace FMBot.Bot.Handlers;
@@ -46,60 +46,75 @@ public class InteractionHandler
         this._guildService = guildService;
         this._cache = cache;
         this._guildSettingBuilder = guildSettingBuilder;
-        this._client.SlashCommandExecuted += SlashCommandAsync;
-        this._client.AutocompleteExecuted += AutoCompleteAsync;
+        this._client.SlashCommandExecuted += SlashCommandExecuted;
+        this._client.AutocompleteExecuted += AutoCompleteExecuted;
         this._client.SelectMenuExecuted += SelectMenuExecuted;
         this._client.ModalSubmitted += ModalSubmitted;
-        this._client.UserCommandExecuted += UserCommandAsync;
+        this._client.UserCommandExecuted += UserCommandExecuted;
         this._client.ButtonExecuted += ButtonExecuted;
     }
 
-    private async Task SlashCommandAsync(SocketInteraction socketInteraction)
+    private async Task SlashCommandExecuted(SocketInteraction socketInteraction)
     {
+        Statistics.DiscordEvents.WithLabels(nameof(SlashCommandExecuted)).Inc();
+
         if (socketInteraction is not SocketSlashCommand socketSlashCommand)
         {
             return;
         }
 
-        var context = new ShardedInteractionContext(this._client, socketInteraction);
-        var contextUser = await this._userService.GetUserAsync(context.User.Id);
-
-        var commandSearch = this._interactionService.SearchSlashCommand(socketSlashCommand);
-
-        if (!commandSearch.IsSuccess)
-        {
-            Log.Error("Someone tried to execute a non-existent slash command! {slashCommand}", socketSlashCommand.CommandName);
-            return;
-        }
-
-        var command = commandSearch.Command;
-
-        if (contextUser?.Blocked == true)
-        {
-            await UserBlockedResponse(context);
-            return;
-        }
-
-        if (!await CommandEnabled(context, command))
-        {
-            return;
-        }
-
-        var keepGoing = await CheckAttributes(context, command.Attributes);
-
-        if (!keepGoing)
-        {
-            return;
-        }
-
-        await this._interactionService.ExecuteCommandAsync(context, this._provider);
-
-        Statistics.SlashCommandsExecuted.WithLabels(command.Name).Inc();
-        _ = this._userService.UpdateUserLastUsedAsync(context.User.Id);
+        _ = Task.Run(() => ExecuteSlashCommand(socketInteraction, socketSlashCommand));
     }
 
-    private async Task UserCommandAsync(SocketInteraction socketInteraction)
+    private async Task ExecuteSlashCommand(SocketInteraction socketInteraction, SocketSlashCommand socketSlashCommand)
     {
+        using (Statistics.SlashCommandHandlerDuration.NewTimer())
+        {
+            var context = new ShardedInteractionContext(this._client, socketInteraction);
+            var contextUser = await this._userService.GetUserAsync(context.User.Id);
+
+            var commandSearch = this._interactionService.SearchSlashCommand(socketSlashCommand);
+
+            if (!commandSearch.IsSuccess)
+            {
+                Log.Error("Someone tried to execute a non-existent slash command! {slashCommand}",
+                    socketSlashCommand.CommandName);
+                return;
+            }
+
+            var command = commandSearch.Command;
+
+            if (contextUser?.Blocked == true)
+            {
+                await UserBlockedResponse(context);
+                return;
+            }
+
+            if (!await CommandEnabled(context, command))
+            {
+                return;
+            }
+
+            var keepGoing = await CheckAttributes(context, command.Attributes);
+
+            if (!keepGoing)
+            {
+                return;
+            }
+
+            await this._interactionService.ExecuteCommandAsync(context, this._provider);
+
+            Statistics.SlashCommandsExecuted.WithLabels(command.Name).Inc();
+
+            _ = Task.Run(() => this._userService.UpdateUserLastUsedAsync(context.User.Id));
+            _ = Task.Run(() => this._userService.AddUserSlashCommandInteraction(context, command.Name));
+        }
+    }
+
+    private async Task UserCommandExecuted(SocketInteraction socketInteraction)
+    {
+        Statistics.DiscordEvents.WithLabels(nameof(UserCommandExecuted)).Inc();
+
         if (socketInteraction is not SocketUserCommand socketUserCommand)
         {
             return;
@@ -125,8 +140,10 @@ public class InteractionHandler
         Statistics.UserCommandsExecuted.Inc();
     }
 
-    private async Task AutoCompleteAsync(SocketInteraction socketInteraction)
+    private async Task AutoCompleteExecuted(SocketInteraction socketInteraction)
     {
+        Statistics.DiscordEvents.WithLabels(nameof(AutoCompleteExecuted)).Inc();
+
         var context = new ShardedInteractionContext(this._client, socketInteraction);
         await this._interactionService.ExecuteCommandAsync(context, this._provider);
 
@@ -135,6 +152,8 @@ public class InteractionHandler
 
     private async Task SelectMenuExecuted(SocketInteraction socketInteraction)
     {
+        Statistics.DiscordEvents.WithLabels(nameof(SelectMenuExecuted)).Inc();
+
         var context = new ShardedInteractionContext(this._client, socketInteraction);
         await this._interactionService.ExecuteCommandAsync(context, this._provider);
 
@@ -143,6 +162,8 @@ public class InteractionHandler
 
     private async Task ModalSubmitted(SocketModal socketModal)
     {
+        Statistics.DiscordEvents.WithLabels(nameof(ModalSubmitted)).Inc();
+
         var context = new ShardedInteractionContext(this._client, socketModal);
         await this._interactionService.ExecuteCommandAsync(context, this._provider);
 
@@ -151,6 +172,8 @@ public class InteractionHandler
 
     private async Task ButtonExecuted(SocketMessageComponent socketMessageComponent)
     {
+        Statistics.DiscordEvents.WithLabels(nameof(ButtonExecuted)).Inc();
+
         var context = new ShardedInteractionContext(this._client, socketMessageComponent);
 
         var commandSearch = this._interactionService.SearchComponentCommand(socketMessageComponent);
@@ -255,7 +278,7 @@ public class InteractionHandler
 
         return true;
     }
-    
+
     private static async Task<bool> CommandEnabled(ShardedInteractionContext context, ICommandInfo searchResult)
     {
         if (context.Guild != null)

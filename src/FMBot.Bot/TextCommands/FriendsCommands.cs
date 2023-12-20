@@ -79,6 +79,28 @@ public class FriendsCommands : BaseCommandModule
         }
     }
 
+    [Command("friended", RunMode = RunMode.Async)]
+    [Summary("Displays people who have added you as a friend.")]
+    [UsernameSetRequired]
+    [CommandCategories(CommandCategory.Friends)]
+    public async Task FriendedAsync()
+    {
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id) ?? this._botSettings.Bot.Prefix;
+
+        try
+        {
+            var response = await this._friendBuilders.FriendedAsync(new ContextModel(this.Context, prfx, contextUser));
+            
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [Command("addfriends", RunMode = RunMode.Async)]
     [Summary("Adds users to your friend list")]
     [Options(Constants.UserMentionExample)]
@@ -118,7 +140,7 @@ public class FriendsCommands : BaseCommandModule
     [Summary("Removes users from your friend list")]
     [Options(Constants.UserMentionExample)]
     [Examples("removefriends fm-bot @user", "removefriend 356268235697553409")]
-    [Alias("unfriend", "friendsremove", "deletefriend", "deletefriends", "removefriend", "friends remove", "friend remove")]
+    [Alias("unfriend", "friendsremove", "deletefriend", "deletefriends", "removefriend", "friends remove", "friend remove", "unadd")]
     [UsernameSetRequired]
     [CommandCategories(CommandCategory.Friends)]
     public async Task RemoveFriends([Summary("Friend names")] params string[] enteredFriends)

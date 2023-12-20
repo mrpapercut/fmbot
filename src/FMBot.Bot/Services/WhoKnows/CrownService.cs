@@ -108,7 +108,7 @@ public class CrownService
 
             return new CrownModel
             {
-                Crown = currentCrownHolder,
+                Crown = currentCrownHolder
             };
         }
 
@@ -198,6 +198,7 @@ public class CrownService
                               $"*Previous owner: {currentCrownHolderName ?? crownUser.UserNameLastFM} with `{currentCrownHolder.CurrentPlaycount}` plays*.",
                 CrownHtmlResult = $"Crown stolen by <b>{topUser.DiscordName}</b> with <b>{topUser.Playcount} plays</b>! " +
                               $"Previous owner: <b>{currentCrownHolderName ?? crownUser.UserNameLastFM}</b> with <b>{currentCrownHolder.CurrentPlaycount} plays</b>.",
+                Stolen = true
             };
         }
 
@@ -423,14 +424,20 @@ public class CrownService
 
     public async Task<IList<UserCrown>> GetCrownsForArtist(int guildId, string artistName)
     {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        return await db.UserCrowns
-            .AsQueryable()
-            .Include(i => i.User)
-            .OrderByDescending(o => o.CurrentPlaycount)
-            .Where(f => f.GuildId == guildId &&
-                        f.ArtistName.ToLower() == artistName.ToLower())
-            .ToListAsync();
+        const string sql = "SELECT * FROM public.user_crowns AS uc " +
+                           "WHERE uc.guild_id = @guildId AND " +
+                           "UPPER(uc.artist_name) = UPPER(CAST(@artistName AS CITEXT)) " +
+                           "ORDER BY current_playcount DESC";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        return (await connection.QueryAsync<UserCrown>(sql, new
+        {
+            guildId,
+            artistName
+        })).ToList();
     }
 
     public async Task RemoveCrowns(IList<UserCrown> crowns)
@@ -443,23 +450,38 @@ public class CrownService
     }
 
     public async Task<List<UserCrown>> GetCrownsForUser(Persistence.Domain.Models.Guild guild, int userId,
-        CrownOrderType crownOrderType)
+        CrownViewType crownViewType)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
-        var query = db.UserCrowns
-            .AsQueryable()
-            .Include(i => i.User)
-            .Where(f => f.GuildId == guild.GuildId &&
-                        f.Active &&
-                        f.UserId == userId);
 
-        if (crownOrderType == CrownOrderType.Playcount)
+        IQueryable<UserCrown> query;
+        if (crownViewType != CrownViewType.Stolen)
         {
-            query = query.OrderByDescending(o => o.CurrentPlaycount);
+            query = db.UserCrowns
+                .AsQueryable()
+                .Include(i => i.User)
+                .Where(f => f.GuildId == guild.GuildId &&
+                            f.Active &&
+                            f.UserId == userId);
+
+            if (crownViewType == CrownViewType.Playcount)
+            {
+                query = query.OrderByDescending(o => o.CurrentPlaycount);
+            }
+            else
+            {
+                query = query.OrderByDescending(o => o.Created);
+            }
         }
         else
         {
-            query = query.OrderByDescending(o => o.Created);
+            query = db.UserCrowns
+                .AsQueryable()
+                .Include(i => i.User)
+                .Where(f => f.GuildId == guild.GuildId &&
+                            !f.Active &&
+                            f.UserId == userId)
+                .OrderByDescending(o => o.Modified);
         }
 
         return await query.ToListAsync();

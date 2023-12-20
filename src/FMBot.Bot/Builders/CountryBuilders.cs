@@ -10,6 +10,7 @@ using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.ThirdParty;
 using FMBot.Domain;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
@@ -58,11 +59,7 @@ public class CountryBuilders
 
             if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
             {
-                var errorEmbed =
-                    GenericEmbedService.RecentScrobbleCallFailedBuilder(recentTracks, context.ContextUser.UserNameLastFM);
-                response.Embed = errorEmbed;
-                response.CommandResponse = CommandResponse.LastFmError;
-                return response;
+                return GenericEmbedService.RecentScrobbleCallFailedResponse(recentTracks, context.ContextUser.UserNameLastFM);
             }
 
             var artistName = recentTracks.Content.RecentTracks.First().ArtistName;
@@ -95,7 +92,9 @@ public class CountryBuilders
                 if (artist?.CountryCode == null)
                 {
                     response.Embed.WithDescription(
-                        "Sorry, the country or artist you're searching for do not exist or do not have a country associated with them on MusicBrainz.");
+                        artist == null
+                            ? "Sorry, the country or artist you're searching for does not exist."
+                            : "Sorry, the artist you're searching for does not have a country associated with them on MusicBrainz.");
 
                     response.CommandResponse = CommandResponse.NotFound;
                     response.ResponseType = ResponseType.Embed;
@@ -111,8 +110,15 @@ public class CountryBuilders
                 foundCountry = this._countryService.GetValidCountry(artist.CountryCode);
 
                 description.AppendLine(
-                    $"**{artist.Name}** is from **{foundCountry.Name}** :flag_{foundCountry.Code.ToLower()}:");
+                    $"### :flag_{foundCountry.Code.ToLower()}: {artist.Name}");
+                description.AppendLine(
+                    $"From **{foundCountry.Name}** ");
 
+                if (artist.Location != null && !string.Equals(artist.Location, foundCountry.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    description.AppendLine(
+                        $"*{artist.Location}*");
+                }
 
                 response.Embed.WithDescription(description.ToString());
 
@@ -131,6 +137,15 @@ public class CountryBuilders
             {
                 var artist = await this._artistsService.GetArtistFromDatabase(countryOptions);
 
+                if (artist is { CountryCode: null })
+                {
+                    var artistCall = await this._dataSourceFactory.GetArtistInfoAsync(artist.Name, context.ContextUser.UserNameLastFM);
+                    if (artistCall.Success)
+                    {
+                        artist = await this._spotifyService.GetOrStoreArtistAsync(artistCall.Content);
+                    }
+                }
+
                 if (artist?.CountryCode != null)
                 {
                     var description = new StringBuilder();
@@ -143,7 +158,15 @@ public class CountryBuilders
                     foundCountry = this._countryService.GetValidCountry(artist.CountryCode);
 
                     description.AppendLine(
-                        $"**{artist.Name}** is from **{foundCountry.Name}** :flag_{foundCountry.Code.ToLower()}:");
+                        $"### :flag_{foundCountry.Code.ToLower()}: {artist.Name}");
+                    description.AppendLine(
+                        $"From **{foundCountry.Name}** ");
+
+                    if (artist.Location != null && !string.Equals(artist.Location, foundCountry.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        description.AppendLine(
+                            $"*{artist.Location}*");
+                    }
 
                     response.Embed.WithDescription(description.ToString());
 
@@ -155,7 +178,9 @@ public class CountryBuilders
                 }
 
                 response.Embed.WithDescription(
-                    "Sorry, the country or artist you're searching for do not exist or do not have a country associated with them on MusicBrainz.");
+                    artist == null
+                        ? "Sorry, the country or artist you're searching for does not exist."
+                        : "Sorry, the artist you're searching for does not have a country associated with them on MusicBrainz.");
                 response.CommandResponse = CommandResponse.NotFound;
                 response.ResponseType = ResponseType.Embed;
                 return response;
@@ -197,32 +222,32 @@ public class CountryBuilders
         var userTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
         var pages = new List<PageBuilder>();
 
-        var title = $"Top artists from {country.Name} :flag_{country.Code.ToLower()}: for {userTitle}";
+        var title = $":flag_{country.Code.ToLower()}: Top artists from {country.Name} for {userTitle}";
 
-        var genrePages = countryArtists.ChunkBy(10);
+        var countryPages = countryArtists.ChunkBy(10);
 
         var counter = 1;
         var pageCounter = 1;
-        foreach (var genrePage in genrePages)
+        foreach (var countryPage in countryPages)
         {
-            var genrePageString = new StringBuilder();
-            foreach (var genreArtist in genrePage)
+            var countryPageString = new StringBuilder();
+            foreach (var genreArtist in countryPage)
             {
-                genrePageString.AppendLine($"{counter}. **{genreArtist.ArtistName}** - *{genreArtist.UserPlaycount} {StringExtensions.GetPlaysString(genreArtist.UserPlaycount)}*");
+                countryPageString.AppendLine($"{counter}. **{genreArtist.ArtistName}** - *{genreArtist.UserPlaycount} {StringExtensions.GetPlaysString(genreArtist.UserPlaycount)}*");
                 counter++;
             }
 
             if (country.Code == "UA")
             {
-                genrePageString.AppendLine();
-                genrePageString.AppendLine("<:ukraine:948301778464694272> [Stand For Ukraine](https://standforukraine.com/)");
+                countryPageString.AppendLine();
+                countryPageString.AppendLine("<:ukraine:948301778464694272> [Stand For Ukraine](https://standforukraine.com/)");
             }
 
             var footer = $"Country source: MusicBrainz\n" +
-                         $"Page {pageCounter}/{genrePages.Count} - {countryArtists.Count} total artists - {countryArtists.Sum(s => s.UserPlaycount)} total scrobbles";
+                         $"Page {pageCounter}/{countryPages.Count} - {countryArtists.Count} total artists - {countryArtists.Sum(s => s.UserPlaycount)} total scrobbles";
 
             pages.Add(new PageBuilder()
-                .WithDescription(genrePageString.ToString())
+                .WithDescription(countryPageString.ToString())
                 .WithTitle(title)
                 .WithUrl($"{LastfmUrlExtensions.GetUserUrl(context.ContextUser.UserNameLastFM)}/library/artists?date_preset=ALL")
                 .WithFooter(footer));
@@ -234,11 +259,11 @@ public class CountryBuilders
         return response;
     }
 
-    public async Task<ResponseModel> GetTopCountries(
-        ContextModel context,
+    public async Task<ResponseModel> GetTopCountries(ContextModel context,
         UserSettingsModel userSettings,
         TimeSettingsModel timeSettings,
-        TopListSettings topListSettings)
+        TopListSettings topListSettings,
+        ResponseMode mode)
     {
         var response = new ResponseModel
         {
@@ -327,9 +352,29 @@ public class CountryBuilders
         var countries = await this._countryService.GetTopCountriesForTopArtists(artists.Content.TopArtists, true);
         var previousTopCountries = await this._countryService.GetTopCountriesForTopArtists(previousTopArtists, true);
 
-        var countryPages = countries.ChunkBy(topListSettings.ExtraLarge
-            ? Constants.DefaultExtraLargePageSize
-            : Constants.DefaultPageSize);
+        if (mode == ResponseMode.Image && countries.Any())
+        {
+            var totalPlays = await this._dataSourceFactory.GetScrobbleCountFromDateAsync(userSettings.UserNameLastFm, timeSettings.TimeFrom,
+                userSettings.SessionKeyLastFm, timeSettings.TimeUntil);
+            artists.Content.TopArtists = await this._artistsService.FillArtistImages(artists.Content.TopArtists);
+
+            var validArtists = countries.First().Artists.Select(s => s.ArtistName.ToLower()).ToArray();
+            var firstArtistImage =
+                artists.Content.TopArtists.FirstOrDefault(f => validArtists.Contains(f.ArtistName.ToLower()) && f.ArtistImageUrl != null)?.ArtistImageUrl;
+
+            var image = await this._puppeteerService.GetTopList(userTitle, "Top Countries", "countries", timeSettings.Description,
+                countries.Count, totalPlays.GetValueOrDefault(), firstArtistImage,
+                this._countryService.GetTopListForTopCountries(countries));
+
+            var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+            response.Stream = encoded.AsStream();
+            response.FileName = $"top-countries-{userSettings.DiscordUserId}";
+            response.ResponseType = ResponseType.ImageOnly;
+
+            return response;
+        }
+
+        var countryPages = countries.ChunkBy((int) topListSettings.EmbedSize);
 
         var counter = 1;
         var pageCounter = 1;
@@ -430,6 +475,7 @@ public class CountryBuilders
             {
                 response.Embed.ErrorResponse(artists.Error, artists.Message, "topgenres", context.DiscordUser);
                 response.CommandResponse = CommandResponse.LastFmError;
+                response.ResponseType = ResponseType.Embed;
                 return response;
             }
         }
@@ -459,6 +505,7 @@ public class CountryBuilders
                 $"Please try again later or try a different time period.");
             response.Embed.WithColor(DiscordConstants.WarningColorOrange);
             response.CommandResponse = CommandResponse.NoScrobbles;
+            response.ResponseType = ResponseType.Embed;
             return response;
         }
 

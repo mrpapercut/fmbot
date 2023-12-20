@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using FMBot.Domain.Models;
 using Newtonsoft.Json;
+using Serilog;
 
 namespace FMBot.Bot.Configurations;
 
@@ -39,9 +40,8 @@ public static class ConfigData
                     BaseServerId = 0000000000000,
                     FeaturedChannelId = 0000000000000,
                     FeaturedPreviewWebhookUrl = "CHANGE-ME-WEBHOOK-URL",
-                    MainInstance = true,
-                    FeaturedMaster = true
-                }, 
+                    UseShardEnvConfig = false
+                },
                 Discord = new DiscordConfig
                 {
                     BotUserId = 0000000000000,
@@ -56,10 +56,27 @@ public static class ConfigData
                     UserUpdateFrequencyInHours = 24,
                     UserIndexFrequencyInDays = 120
                 },
-                Genius = new GeniusConfig(),
-                Spotify = new SpotifyConfig(),
-                Discogs = new DiscogsConfig(),
-                Environment = "local"
+                Genius = new GeniusConfig
+                {
+                    AccessToken = string.Empty
+                },
+                Spotify = new SpotifyConfig
+                {
+                    Key = string.Empty,
+                    Secret = string.Empty
+                },
+                Discogs = new DiscogsConfig
+                {
+                    Key = string.Empty,
+                    Secret = string.Empty
+                },
+                Environment = "local",
+                OpenAi = new OpenAiConfig
+                {
+                    Key = string.Empty,
+                    RoastPrompt = "Write a roast about me using some of my top artists: ",
+                    ComplimentPrompt = "Write a compliment about me using some of my top artists: ",
+                }
             };
 
             var json = JsonConvert.SerializeObject(Data, Formatting.Indented);
@@ -67,7 +84,7 @@ public static class ConfigData
 
             Console.WriteLine("Created new bot configuration file with default values. \n" +
                               $"Please set your API keys in {ConfigFolder}/{ConfigFile} before running the bot again. \n \n" +
-                              "Exiting in 10 seconds...", 
+                              "Exiting in 10 seconds...",
                 ConsoleColor.Red);
 
             Thread.Sleep(10000);
@@ -77,6 +94,28 @@ public static class ConfigData
         {
             var json = File.ReadAllText(ConfigFolder + "/" + ConfigFile);
             Data = JsonConvert.DeserializeObject<BotSettings>(json);
+
+            if (Data.Bot.UseShardEnvConfig == true)
+            {
+                Log.Information("Config is using shard environment variables");
+
+                Data.Shards = new ShardConfig
+                {
+                    MainInstance = Environment.GetEnvironmentVariable("SHARDS_MAIN_INSTANCE") == "true",
+                    StartShard = Environment.GetEnvironmentVariable("SHARDS_FIRST_SHARD") != null
+                        ? int.Parse(Environment.GetEnvironmentVariable("SHARDS_FIRST_SHARD"))
+                        : null,
+                    EndShard = Environment.GetEnvironmentVariable("SHARDS_LAST_SHARD") != null
+                        ? int.Parse(Environment.GetEnvironmentVariable("SHARDS_LAST_SHARD"))
+                        : null,
+                    TotalShards = Environment.GetEnvironmentVariable("SHARDS_TOTAL_SHARDS") != null
+                        ? int.Parse(Environment.GetEnvironmentVariable("SHARDS_TOTAL_SHARDS"))
+                        : null,
+                    InstanceName = Environment.GetEnvironmentVariable("INSTANCE_NAME")
+                };
+
+                Log.Information("Config initiated - MainInstance {mainInstance}", Data.Shards.MainInstance);
+            }
         }
     }
 }

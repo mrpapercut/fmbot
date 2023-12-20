@@ -68,14 +68,14 @@ public class SpotifyService
         return await spotify.Search.Item(searchRequest);
     }
 
-    public async Task<Artist> GetOrStoreArtistAsync(ArtistInfo artistInfo, string artistNameBeforeCorrect = null, bool redirectsEnabled = true)
+    public async Task<Artist> GetOrStoreArtistAsync(ArtistInfo artistInfo, string artistNameBeforeCorrect = null, bool redirectsEnabled = true, bool bypassMbUpdatedFilter = false)
     {
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
         try
         {
-            var dbArtist = await this._artistRepository.GetArtistForName(artistInfo.ArtistName, connection, true);
+            var dbArtist = await ArtistRepository.GetArtistForName(artistInfo.ArtistName, connection, true, true);
 
             if (dbArtist == null)
             {
@@ -123,8 +123,7 @@ public class SpotifyService
                     }
                     if (spotifyArtist.Genres.Any())
                     {
-                        await this._artistRepository
-                            .AddOrUpdateArtistGenres(artistToAdd.Id, spotifyArtist.Genres.Select(s => s), connection);
+                        await ArtistRepository.AddOrUpdateArtistGenres(artistToAdd.Id, spotifyArtist.Genres.Select(s => s), connection);
                     }
                 }
                 else
@@ -138,6 +137,11 @@ public class SpotifyService
                     }
                 }
 
+                if (musicBrainzUpdated.Updated && artistToAdd.ArtistLinks != null && artistToAdd.ArtistLinks.Count != 0 && artistToAdd.Id != 0)
+                {
+                    await ArtistRepository.AddOrUpdateArtistLinks(artistToAdd.Id, artistToAdd.ArtistLinks, connection);
+                }
+
                 if (spotifyArtist != null && spotifyArtist.Genres.Any())
                 {
                     artistToAdd.ArtistGenres = spotifyArtist.Genres.Select(s => new ArtistGenre
@@ -146,19 +150,21 @@ public class SpotifyService
                     }).ToList();
                 }
 
-                if (redirectsEnabled && artistNameBeforeCorrect != null && !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.CurrentCultureIgnoreCase))
+                if (redirectsEnabled &&
+                    artistNameBeforeCorrect != null &&
+                    !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.OrdinalIgnoreCase))
                 {
-                    await this._artistRepository
-                        .AddOrUpdateArtistAlias(artistToAdd.Id, artistNameBeforeCorrect, connection);
+                    await ArtistRepository.AddOrUpdateArtistAlias(artistToAdd.Id, artistNameBeforeCorrect, connection);
                 }
 
                 return artistToAdd;
             }
 
-            if (redirectsEnabled && artistNameBeforeCorrect != null && !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.CurrentCultureIgnoreCase))
+            if (redirectsEnabled &&
+                artistNameBeforeCorrect != null &&
+                !string.Equals(artistNameBeforeCorrect, artistInfo.ArtistName, StringComparison.OrdinalIgnoreCase))
             {
-                await this._artistRepository
-                    .AddOrUpdateArtistAlias(dbArtist.Id, artistNameBeforeCorrect, connection);
+                await ArtistRepository.AddOrUpdateArtistAlias(dbArtist.Id, artistNameBeforeCorrect, connection);
             }
 
             if (artistInfo.Description != null && dbArtist.LastFmDescription != artistInfo.Description)
@@ -172,11 +178,16 @@ public class SpotifyService
                 await db.SaveChangesAsync();
             }
 
-            var musicBrainzUpdate = await this._musicBrainzService.AddMusicBrainzDataToArtistAsync(dbArtist);
+            var musicBrainzUpdate = await this._musicBrainzService.AddMusicBrainzDataToArtistAsync(dbArtist, bypassMbUpdatedFilter);
 
             if (musicBrainzUpdate.Updated)
             {
                 dbArtist = musicBrainzUpdate.Artist;
+
+                if (dbArtist.ArtistLinks != null && dbArtist.ArtistLinks.Any())
+                {
+                    await ArtistRepository.AddOrUpdateArtistLinks(dbArtist.Id, dbArtist.ArtistLinks, connection);
+                }
 
                 await using var db = await this._contextFactory.CreateDbContextAsync();
                 db.Entry(dbArtist).State = EntityState.Modified;
@@ -204,8 +215,7 @@ public class SpotifyService
 
                 if (spotifyArtist != null && spotifyArtist.Genres.Any())
                 {
-                    await this._artistRepository
-                        .AddOrUpdateArtistGenres(dbArtist.Id, spotifyArtist.Genres.Select(s => s), connection);
+                    await ArtistRepository.AddOrUpdateArtistGenres(dbArtist.Id, spotifyArtist.Genres.Select(s => s), connection);
                 }
 
                 dbArtist.SpotifyImageDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
@@ -288,7 +298,7 @@ public class SpotifyService
                     LastfmDate = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
                 };
 
-                var artist = await this._artistRepository.GetArtistForName(trackInfo.ArtistName, connection);
+                var artist = await ArtistRepository.GetArtistForName(trackInfo.ArtistName, connection);
 
                 if (artist != null)
                 {
@@ -329,7 +339,7 @@ public class SpotifyService
             }
             if (!dbTrack.ArtistId.HasValue)
             {
-                var artist = await this._artistRepository.GetArtistForName(trackInfo.ArtistName, connection);
+                var artist = await ArtistRepository.GetArtistForName(trackInfo.ArtistName, connection);
 
                 if (artist != null)
                 {
@@ -511,7 +521,7 @@ public class SpotifyService
                 LastfmDate = DateTime.UtcNow
             };
 
-            var artist = await this._artistRepository.GetArtistForName(albumInfo.ArtistName, connection);
+            var artist = await ArtistRepository.GetArtistForName(albumInfo.ArtistName, connection);
 
             if (artist != null && artist.Id != 0)
             {
@@ -563,9 +573,9 @@ public class SpotifyService
             db.Entry(dbAlbum).State = EntityState.Modified;
         }
 
-        if (dbAlbum.Artist == null)
+        if (!dbAlbum.ArtistId.HasValue)
         {
-            var artist = await this._artistRepository.GetArtistForName(albumInfo.ArtistName, connection);
+            var artist = await ArtistRepository.GetArtistForName(albumInfo.ArtistName, connection);
 
             if (artist != null && artist.Id != 0)
             {
@@ -662,12 +672,21 @@ public class SpotifyService
 
     private SpotifyClient GetSpotifyWebApi()
     {
-        var config = SpotifyClientConfig
-            .CreateDefault()
-            .WithHTTPClient(new NetHttpClient(this._httpClient))
-            .WithAuthenticator(new ClientCredentialsAuthenticator(this._botSettings.Spotify.Key, this._botSettings.Spotify.Secret));
+        InitApiClientConfig();
 
-        return new SpotifyClient(config);
+        return new SpotifyClient(PublicProperties.SpotifyConfig);
+    }
+
+    public void InitApiClientConfig()
+    {
+        if (PublicProperties.SpotifyConfig == null)
+        {
+            PublicProperties.SpotifyConfig = SpotifyClientConfig
+                .CreateDefault()
+                .WithHTTPClient(new NetHttpClient(this._httpClient))
+                .WithAuthenticator(new ClientCredentialsAuthenticator(this._botSettings.Spotify.Key,
+                    this._botSettings.Spotify.Secret));
+        }
     }
 
     public static RecentTrack SpotifyGameToRecentTrack(SpotifyGame spotifyActivity)

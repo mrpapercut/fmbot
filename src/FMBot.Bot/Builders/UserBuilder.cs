@@ -21,7 +21,6 @@ using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using Microsoft.Extensions.Options;
-using User = FMBot.Persistence.Domain.Models.User;
 
 namespace FMBot.Bot.Builders;
 
@@ -70,6 +69,47 @@ public class UserBuilder
         this._botSettings = botSettings.Value;
     }
 
+    public async Task<ResponseModel> GetUserSettings(ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed
+        };
+
+        response.Embed.WithTitle($".fmbot user settings - {context.DiscordUser.GlobalName}");
+
+        response.Embed.WithFooter($"Use '{context.Prefix}configuration' for server-wide settings");
+
+        var settings = new StringBuilder();
+
+        settings.AppendLine($"Connected with Last.fm account [{context.ContextUser.UserNameLastFM}]({LastfmUrlExtensions.GetUserUrl(context.ContextUser.UserNameLastFM)}). Use `/login` to change.");
+        settings.AppendLine();
+        settings.AppendLine($"Click the dropdown below to change your user settings.");
+
+        response.Embed.WithDescription(settings.ToString());
+
+        var guildSettings = new SelectMenuBuilder()
+            .WithPlaceholder("Select setting to view or change")
+            .WithCustomId(InteractionConstants.UserSetting)
+            .WithMaxValues(1);
+
+        foreach (var setting in ((UserSetting[])Enum.GetValues(typeof(UserSetting))))
+        {
+            var name = setting.GetAttribute<OptionAttribute>().Name;
+            var description = setting.GetAttribute<OptionAttribute>().Description;
+            var value = Enum.GetName(setting);
+
+            guildSettings.AddOption(new SelectMenuOptionBuilder(name, $"us-view-{value}", description));
+        }
+
+        response.Components = new ComponentBuilder()
+            .WithSelectMenu(guildSettings);
+
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+
+        return response;
+    }
+
     public async Task<ResponseModel> FeaturedAsync(ContextModel context)
     {
         var response = new ResponseModel
@@ -109,7 +149,7 @@ public class UserBuilder
 
         if (this._timer.CurrentFeatured.SupporterDay && context.ContextUser.UserType == UserType.User)
         {
-            response.Components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: SupporterService.GetSupporterLink());
+            response.Components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: Constants.GetSupporterDiscordLink);
         }
 
         response.Embed.WithFooter($"View your featured history with '{context.Prefix}featuredlog'");
@@ -145,7 +185,7 @@ public class UserBuilder
         return response;
     }
 
-    public static ResponseModel Mode(
+    public static ResponseModel FmMode(
         ContextModel context,
         Guild guild = null)
     {
@@ -156,13 +196,19 @@ public class UserBuilder
 
         var fmType = new SelectMenuBuilder()
                 .WithPlaceholder("Select embed type")
-                .WithCustomId(InteractionConstants.FmSettingType)
+                .WithCustomId(InteractionConstants.FmCommand.FmSettingType)
                 .WithMinValues(1)
                 .WithMaxValues(1);
 
-        foreach (var name in Enum.GetNames(typeof(FmEmbedType)).OrderBy(o => o))
+        foreach (var option in ((FmEmbedType[])Enum.GetValues(typeof(FmEmbedType))).OrderBy(o => o.GetAttribute<OptionOrderAttribute>().Order))
         {
-            fmType.AddOption(new SelectMenuOptionBuilder(name, name));
+            var name = option.GetAttribute<OptionAttribute>().Name;
+            var description = option.GetAttribute<OptionAttribute>().Description;
+            var value = Enum.GetName(option);
+
+            var active = option == context.ContextUser.FmEmbedType;
+
+            fmType.AddOption(new SelectMenuOptionBuilder(name, value, description, isDefault: active));
         }
 
         var maxOptions = context.ContextUser.UserType == UserType.User
@@ -171,16 +217,17 @@ public class UserBuilder
 
         var fmOptions = new SelectMenuBuilder()
             .WithPlaceholder("Select footer options")
-            .WithCustomId(InteractionConstants.FmSettingFooter)
+            .WithCustomId(InteractionConstants.FmCommand.FmSettingFooter)
+            .WithMinValues(0)
             .WithMaxValues(maxOptions);
 
         var fmSupporterOptions = new SelectMenuBuilder()
             .WithPlaceholder("Select supporter-exclusive footer option")
-            .WithCustomId(InteractionConstants.FmSettingFooterSupporter)
+            .WithCustomId(InteractionConstants.FmCommand.FmSettingFooterSupporter)
             .WithMinValues(0)
             .WithMaxValues(1);
 
-        foreach (var option in ((FmFooterOption[])Enum.GetValues(typeof(FmFooterOption))).Where(w => w != FmFooterOption.None))
+        foreach (var option in ((FmFooterOption[])Enum.GetValues(typeof(FmFooterOption))))
         {
             var name = option.GetAttribute<OptionAttribute>().Name;
             var description = option.GetAttribute<OptionAttribute>().Description;
@@ -232,7 +279,7 @@ public class UserBuilder
 
         if (context.ContextUser.UserType == UserType.User)
         {
-            embedDescription.Append($"[.fmbot supporters]({Constants.GetSupporterOverviewLink}) can select up to {Constants.MaxFooterOptionsSupporter} options.");
+            embedDescription.Append($"[.fmbot supporters]({Constants.GetSupporterDiscordLink}) can select up to {Constants.MaxFooterOptionsSupporter} options.");
         }
 
         if (guild?.FmEmbedType != null)
@@ -249,6 +296,65 @@ public class UserBuilder
         return response;
     }
 
+    public static ResponseModel ResponseMode(ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed,
+        };
+
+        response.Embed.WithAuthor("Configuring your default WhoKnows and top list mode");
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+
+        var fmType = new SelectMenuBuilder()
+                .WithPlaceholder("Select response mode")
+                .WithCustomId(InteractionConstants.ResponseModeSetting)
+                .WithMinValues(1)
+                .WithMaxValues(1);
+
+        foreach (var name in Enum.GetNames(typeof(ResponseMode)).OrderBy(o => o))
+        {
+            var picked = context.SlashCommand && context.ContextUser.Mode.HasValue && Enum.GetName(context.ContextUser.Mode.Value) == name;
+
+            fmType.AddOption(new SelectMenuOptionBuilder(name, name, isDefault: picked));
+        }
+
+        response.Components = new ComponentBuilder()
+            .WithSelectMenu(fmType);
+
+        var description = new StringBuilder();
+
+        description.AppendLine("You can also override this when using a command:");
+        description.AppendLine("- `image` / `img`");
+        description.AppendLine("- `embed`");
+
+        response.Embed.WithDescription(description.ToString());
+
+        return response;
+    }
+
+    public static ResponseModel ModePick(ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed,
+            Components = new ComponentBuilder()
+                .WithButton("'.fm' mode", InteractionConstants.FmCommand.FmModeChange)
+                .WithButton("Response mode", InteractionConstants.ResponseModeChange)
+        };
+
+        var description = new StringBuilder();
+
+        description.AppendLine("Pick which mode you want to modify:");
+        description.AppendLine();
+        description.AppendLine("- `fm` mode - Changes how your .fm command looks");
+        description.AppendLine("- Response mode - changes default response to `WhoKnows` and top list commands");
+
+        response.Embed.WithDescription(description.ToString());
+
+        return response;
+    }
+
     public static ResponseModel Privacy(ContextModel context)
     {
         var response = new ResponseModel
@@ -257,14 +363,16 @@ public class UserBuilder
         };
 
         var privacySetting = new SelectMenuBuilder()
-                .WithPlaceholder("Select global WhoKnows privacy")
+                .WithPlaceholder("Select Global WhoKnows privacy")
                 .WithCustomId(InteractionConstants.FmPrivacySetting)
                 .WithMinValues(1)
                 .WithMaxValues(1);
 
         foreach (var name in Enum.GetNames(typeof(PrivacyLevel)).OrderBy(o => o))
         {
-            privacySetting.AddOption(new SelectMenuOptionBuilder(name, name));
+            var picked = context.SlashCommand && Enum.GetName(context.ContextUser.PrivacyLevel) == name;
+
+            privacySetting.AddOption(new SelectMenuOptionBuilder(name, name, isDefault: picked));
         }
 
         var builder = new ComponentBuilder()
@@ -272,17 +380,15 @@ public class UserBuilder
 
         response.Components = builder;
 
-        response.Embed.WithAuthor("Configuring your global WhoKnows privacy");
+        response.Embed.WithAuthor("Configuring your Global WhoKnows visibility");
         response.Embed.WithColor(DiscordConstants.InformationColorBlue);
 
         var embedDescription = new StringBuilder();
 
-        embedDescription.AppendLine("Use this option to change your visibility to other .fmbot users.");
-        embedDescription.AppendLine();
-
-        response.Embed.AddField("Options:",
-            "**Global**: You are visible everywhere in global WhoKnows with your Last.fm username\n" +
-            "**Server**: You are not visible in global WhoKnows, but users in the same server will still see your name.");
+        response.Embed.AddField("Global",
+            "*You are visible everywhere in global WhoKnows with your Last.fm username.*");
+        response.Embed.AddField("Server",
+            "*You are not visible in global WhoKnows, but users in the same server will still see your name.*");
 
         response.Embed.WithDescription(embedDescription.ToString());
 
@@ -296,7 +402,7 @@ public class UserBuilder
             ResponseType = ResponseType.Embed
         };
 
-        List<FeaturedLog> featuredHistory = new();
+        List<FeaturedLog> featuredHistory;
 
         var odds = await this._featuredService.GetFeaturedOddsAsync();
         var footer = new StringBuilder();
@@ -333,9 +439,13 @@ public class UserBuilder
                         $"{userSettings.DisplayName}{userSettings.UserType.UserTypeToIcon()}'s featured history");
 
                     var self = userSettings.DifferentUser ? "They" : "You";
-                    footer.AppendLine(featuredHistory.Count == 1
-                        ? $"{self} have only been featured once. Every hour, that is a chance of 1 in {odds}!"
-                        : $"{self} have been featured {featuredHistory.Count} times");
+
+                    if (featuredHistory.Count >= 1)
+                    {
+                        footer.AppendLine(featuredHistory.Count == 1
+                            ? $"{self} have only been featured once. Every hour, that is a chance of 1 in {odds}!"
+                            : $"{self} have been featured {featuredHistory.Count} times");
+                    }
 
                     break;
                 }
@@ -347,13 +457,16 @@ public class UserBuilder
         var nextSupporterSunday = FeaturedService.GetDaysUntilNextSupporterSunday();
         var pages = new List<PageBuilder>();
 
-        if (context.ContextUser.UserType == UserType.Supporter)
+        if (featuredHistory.Any())
         {
-            footer.AppendLine($"As a thank you for supporting, you have better odds every first Sunday of the month.");
-        }
-        else
-        {
-            footer.AppendLine($"Every first Sunday of the month is Supporter Sunday (in {nextSupporterSunday} {StringExtensions.GetDaysString(nextSupporterSunday)}). Check '{context.Prefix}getsupporter' for info.");
+            if (SupporterService.IsSupporter(context.ContextUser.UserType))
+            {
+                footer.AppendLine($"As a thank you for supporting, you have better odds every first Sunday of the month.");
+            }
+            else
+            {
+                footer.AppendLine($"Every first Sunday of the month is Supporter Sunday (in {nextSupporterSunday} {StringExtensions.GetDaysString(nextSupporterSunday)}). Check '{context.Prefix}getsupporter' for info.");
+            }
         }
 
         var featuredPages = featuredHistory
@@ -390,7 +503,7 @@ public class UserBuilder
                                 description.AppendLine($"Join [our server](https://discord.gg/6y3jJjtDqK) to get pinged if you get featured.");
                             }
 
-                            if (context.ContextUser.UserType == UserType.Supporter)
+                            if (SupporterService.IsSupporter(context.ContextUser.UserType))
                             {
                                 description.AppendLine();
                                 description.AppendLine($"Also, as a thank you for being a supporter you have a higher chance of becoming featured every first Sunday of the month on Supporter Sunday. The next one is in {nextSupporterSunday} {StringExtensions.GetDaysString(nextSupporterSunday)}.");
@@ -398,7 +511,8 @@ public class UserBuilder
                             else
                             {
                                 description.AppendLine();
-                                description.AppendLine($"Become an [.fmbot supporter](https://opencollective.com/fmbot/contribute) and get a higher chance every Supporter Sunday. The next Supporter Sunday is in {nextSupporterSunday} {StringExtensions.GetDaysString(nextSupporterSunday)} (first Sunday of each month).");
+                                description.AppendLine($"Become an [.fmbot supporter]({Constants.GetSupporterDiscordLink}) and get a higher chance every Supporter Sunday. The next Supporter Sunday is in {nextSupporterSunday} {StringExtensions.GetDaysString(nextSupporterSunday)} (first Sunday of each month).");
+                                response.Components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: Constants.GetSupporterDiscordLink);
                             }
                         }
                         else
@@ -461,7 +575,7 @@ public class UserBuilder
         return response;
     }
 
-    public async Task<ResponseModel> StatsAsync(ContextModel context, UserSettingsModel userSettings, User user)
+    public async Task<ResponseModel> ProfileAsync(ContextModel context, UserSettingsModel userSettings)
     {
         var response = new ResponseModel
         {
@@ -469,6 +583,7 @@ public class UserBuilder
         };
 
         string userTitle;
+        var user = context.ContextUser;
         if (userSettings.DifferentUser)
         {
             if (userSettings.DifferentUser && user.DiscordUserId == userSettings.DiscordUserId)
@@ -479,7 +594,7 @@ public class UserBuilder
             }
 
             userTitle =
-                $"{userSettings.UserNameLastFm}, requested by {await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser)}";
+                $"{userSettings.DisplayName}, requested by {await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser)}";
             user = await this._userService.GetFullUserAsync(userSettings.DiscordUserId);
         }
         else
@@ -487,7 +602,7 @@ public class UserBuilder
             userTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
         }
 
-        response.EmbedAuthor.WithName($"Stats for {userTitle}");
+        response.EmbedAuthor.WithName($"Profile for {userTitle}");
         response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}");
         response.Embed.WithAuthor(response.EmbedAuthor);
 
@@ -519,50 +634,45 @@ public class UserBuilder
             }
         }
 
-        if (this._supporterService.ShowPromotionalMessage(context.ContextUser.UserType, context.DiscordGuild?.Id))
-        {
-            var random = new Random().Next(0, Constants.SupporterPromoChance);
-            if (random == 1)
-            {
-                this._supporterService.SetGuildPromoCache(context.DiscordGuild?.Id);
-                description.AppendLine($"*Want to see an overview of all your years? [View all perks and get .fmbot supporter here.]({Constants.GetSupporterOverviewLink})*");
-            }
-        }
-
-        if (userInfo.Type != "user" && userInfo.Type != "subscriber")
-        {
-            description.AppendLine($"Last.fm {userInfo.Type}");
-        }
-
         if (description.Length > 0)
         {
             response.Embed.WithDescription(description.ToString());
         }
 
         var lastFmStats = new StringBuilder();
-        lastFmStats.AppendLine($"Name: **{userInfo.Name}**");
-        lastFmStats.AppendLine($"Username: **[{userSettings.UserNameLastFm}]({LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)})**");
-        if (userInfo.Subscriber)
+        if (!string.IsNullOrWhiteSpace(userInfo.Name))
         {
-            lastFmStats.AppendLine("Last.fm Pro subscriber");
+            lastFmStats.AppendLine($"*{userInfo.Name}*");
         }
 
-        lastFmStats.AppendLine($"Country: **{userInfo.Country}**");
+        lastFmStats.AppendLine($"**[{userSettings.UserNameLastFm}]({LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)})**");
+        lastFmStats.AppendLine($"**{userInfo.Country}**");
+        lastFmStats.AppendLine($"Since **<t:{userInfo.RegisteredUnix}:D>**");
 
-        lastFmStats.AppendLine($"Registered: **<t:{userInfo.RegisteredUnix}:D>** (<t:{userInfo.RegisteredUnix}:R>)");
+        if (userInfo.Type != "user")
+        {
+            if (userInfo.Type == "subscriber")
+            {
+                lastFmStats.AppendLine("Last.fm Pro subscriber");
+            }
+            else
+            {
+                lastFmStats.AppendLine($"Last.fm {userInfo.Type}");
+            }
+        }
 
-        response.Embed.AddField("Last.fm info", lastFmStats.ToString(), true);
+        response.Embed.AddField("Last.fm", lastFmStats.ToString(), true);
 
         var age = DateTimeOffset.FromUnixTimeSeconds(userInfo.RegisteredUnix);
         var totalDays = (DateTime.UtcNow - age).TotalDays;
         var avgPerDay = userInfo.Playcount / totalDays;
 
         var playcounts = new StringBuilder();
-        playcounts.AppendLine($"Scrobbles: **{userInfo.Playcount}**");
-        playcounts.AppendLine($"Tracks: **{userInfo.TrackCount}**");
-        playcounts.AppendLine($"Albums: **{userInfo.AlbumCount}**");
-        playcounts.AppendLine($"Artists: **{userInfo.ArtistCount}**");
-        response.Embed.AddField("Playcounts", playcounts.ToString(), true);
+        playcounts.AppendLine($"**{userInfo.Playcount}** scrobbles");
+        playcounts.AppendLine($"**{userInfo.TrackCount}** different tracks");
+        playcounts.AppendLine($"**{userInfo.AlbumCount}** different albums");
+        playcounts.AppendLine($"**{userInfo.ArtistCount}** different artists");
+        response.Embed.AddField("Counts", playcounts.ToString(), true);
 
         var allPlays = await this._playService.GetAllUserPlays(userSettings.UserId);
 
@@ -603,9 +713,12 @@ public class UserBuilder
         {
             var collection = new StringBuilder();
 
-            collection.AppendLine($"{user.UserDiscogs.MinimumValue} min " +
-                                  $"• {user.UserDiscogs.MedianValue} med " +
-                                  $"• {user.UserDiscogs.MaximumValue} max");
+            if (user.UserDiscogs.HideValue != true)
+            {
+                collection.AppendLine($"{user.UserDiscogs.MinimumValue} min " +
+                                      $"• {user.UserDiscogs.MedianValue} med " +
+                                      $"• {user.UserDiscogs.MaximumValue} max");
+            }
 
             if (user.UserType != UserType.User)
             {
@@ -622,9 +735,104 @@ public class UserBuilder
                 }
             }
 
-            var determiner = userSettings.DifferentUser ? "Their" : "Your";
-            response.Embed.AddField($"{determiner} Discogs collection", collection.ToString());
+            if (collection.Length > 0)
+            {
+                var determiner = userSettings.DifferentUser ? "Their" : "Your";
+                response.Embed.AddField($"{determiner} Discogs collection", collection.ToString());
+            }
         }
+
+        var footer = new StringBuilder();
+        if (user.Friends?.Count > 0)
+        {
+            footer.AppendLine($"Friends: {user.Friends?.Count}");
+        }
+        if (user.FriendedByUsers?.Count > 0)
+        {
+            footer.AppendLine($"Befriended by: {user.FriendedByUsers?.Count}");
+        }
+        if (footer.Length > 0)
+        {
+            response.Embed.WithFooter(footer.ToString());
+        }
+
+        response.Components = new ComponentBuilder()
+            .WithButton("View history", $"{InteractionConstants.User.History}-{user.DiscordUserId}-{context.ContextUser.DiscordUserId}", style: ButtonStyle.Secondary, emote: new Emoji("📖"))
+            .WithButton("Last.fm", style: ButtonStyle.Link, url: LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm), emote: Emote.Parse("<:lastfm:882227627287515166>"));
+
+        return response;
+    }
+
+    public async Task<ResponseModel> ProfileHistoryAsync(ContextModel context, UserSettingsModel userSettings)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed
+        };
+
+        string userTitle;
+        var user = context.ContextUser;
+        if (userSettings.DifferentUser)
+        {
+            if (userSettings.DifferentUser && context.ContextUser.DiscordUserId == userSettings.DiscordUserId)
+            {
+                response.Embed.WithDescription("That user is not registered in .fmbot.");
+                response.CommandResponse = CommandResponse.WrongInput;
+                return response;
+            }
+
+            userTitle =
+                $"{userSettings.UserNameLastFm}, requested by {await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser)}";
+            user = await this._userService.GetFullUserAsync(userSettings.DiscordUserId);
+        }
+        else
+        {
+            userTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
+        }
+
+        response.EmbedAuthor.WithName($"History for {userTitle}");
+        response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}");
+        response.Embed.WithAuthor(response.EmbedAuthor);
+        var anyHistoryStored = false;
+
+        var description = new StringBuilder();
+        if (user.UserType != UserType.User)
+        {
+            description.AppendLine($"{userSettings.UserType.UserTypeToIcon()} .fmbot {userSettings.UserType.ToString().ToLower()}");
+        }
+        if (user.DataSource != DataSource.LastFm)
+        {
+            var name = user.DataSource.GetAttribute<OptionAttribute>().Name;
+
+            switch (user.DataSource)
+            {
+                case DataSource.FullSpotifyThenLastFm:
+                case DataSource.SpotifyThenFullLastFm:
+                    description.AppendLine($"Imported: {name}");
+                    break;
+                case DataSource.LastFm:
+                default:
+                    break;
+            }
+        }
+
+        if (this._supporterService.ShowPromotionalMessage(context.ContextUser.UserType, context.DiscordGuild?.Id))
+        {
+            var random = new Random().Next(0, Constants.SupporterPromoChance);
+            switch (random)
+            {
+                case 1:
+                    this._supporterService.SetGuildPromoCache(context.DiscordGuild?.Id);
+                    description.AppendLine($"*Want to see an overview of all your years? [View all perks and get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*");
+                    break;
+                case 2:
+                    this._supporterService.SetGuildPromoCache(context.DiscordGuild?.Id);
+                    description.AppendLine($"*Want to import and use your Spotify history in .fmbot? [View all perks and get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*");
+                    break;
+            }
+        }
+
+        var allPlays = await this._playService.GetAllUserPlays(userSettings.UserId);
 
         var monthDescription = new StringBuilder();
         var monthGroups = allPlays
@@ -648,7 +856,8 @@ public class UserBuilder
         }
         if (monthDescription.Length > 0)
         {
-            response.Embed.AddField("Months", monthDescription.ToString());
+            anyHistoryStored = true;
+            response.Embed.AddField("Last months", monthDescription.ToString());
         }
 
         if (userSettings.UserType != UserType.User)
@@ -677,6 +886,7 @@ public class UserBuilder
             }
             if (yearDescription.Length > 0)
             {
+                anyHistoryStored = true;
                 response.Embed.AddField("Years", $"**{yearDescription.ToString()}**");
             }
         }
@@ -689,29 +899,30 @@ public class UserBuilder
                 if (user.UserDiscogs == null)
                 {
                     response.Embed.AddField("Years", $"*Want to see an overview of your scrobbles throughout the years? " +
-                                                     $"[Get .fmbot supporter here.]({SupporterService.GetSupporterLink()})*");
+                                                     $"[Get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*");
                 }
                 else
                 {
                     response.Embed.AddField("Years", $"*Want to see an overview of your scrobbles throughout the years and your Discogs collection? " +
-                                                     $"[Get .fmbot supporter here.]({SupporterService.GetSupporterLink()})*");
+                                                     $"[Get .fmbot supporter here.]({Constants.GetSupporterDiscordLink})*");
                 }
             }
         }
 
-        var footer = new StringBuilder();
-        if (user.Friends?.Count > 0)
+        if (!anyHistoryStored)
         {
-            footer.AppendLine($"Friends: {user.Friends?.Count}");
+            if (description.Length > 0)
+            {
+                description.AppendLine();
+            }
+            description.AppendLine("*Sorry, it seems like there is no stored data in .fmbot for this user.*");
         }
-        if (user.FriendedByUsers?.Count > 0)
-        {
-            footer.AppendLine($"Befriended by: {user.FriendedByUsers?.Count}");
-        }
-        if (footer.Length > 0)
-        {
-            response.Embed.WithFooter(footer.ToString());
-        }
+
+        response.Embed.WithDescription(description.ToString());
+
+        response.Components = new ComponentBuilder()
+            .WithButton("View profile", $"{InteractionConstants.User.Profile}-{user.DiscordUserId}-{context.ContextUser.DiscordUserId}", style: ButtonStyle.Secondary, emote: new Emoji("ℹ"))
+            .WithButton("Last.fm", style: ButtonStyle.Link, url: LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm), emote: Emote.Parse("<:lastfm:882227627287515166>"));
 
         return response;
     }
@@ -756,10 +967,10 @@ public class UserBuilder
             else
             {
                 description.Append($"You've ran out of command uses for today, unfortunately the service we use for this is not free. ");
-                description.AppendLine($"[Become a supporter]({SupporterService.GetSupporterLink()}) to raise your daily limit, get access to better responses and the possibility to use the command on others.");
+                description.AppendLine($"[Become a supporter]({Constants.GetSupporterDiscordLink}) to raise your daily limit, get access to better responses and the possibility to use the command on others.");
 
                 response.Components = new ComponentBuilder()
-                    .WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: SupporterService.GetSupporterLink());
+                    .WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: Constants.GetSupporterDiscordLink);
             }
         }
         else
@@ -776,7 +987,7 @@ public class UserBuilder
         }
         if (differentUserButNotAllowed)
         {
-            description.AppendLine($"*Sorry, only [.fmbot supporters]({SupporterService.GetSupporterLink()}) can use this command on others.*");
+            description.AppendLine($"*Sorry, only [.fmbot supporters]({Constants.GetSupporterDiscordLink}) can use this command on others.*");
         }
         description.AppendLine();
         description.AppendLine("Some top artists might be sent to OpenAI. No other data is sent.");
@@ -826,7 +1037,7 @@ public class UserBuilder
             if (context.ContextUser.UserType == UserType.User)
             {
                 description.Append($"You've ran out of command uses for today, unfortunately the service we use for this is not free. ");
-                description.AppendLine($"[Become a supporter]({SupporterService.GetSupporterLink()}) to raise your daily limit and the possibility to use the command on others.");
+                description.AppendLine($"[Become a supporter]({Constants.GetSupporterDiscordLink}) to raise your daily limit and the possibility to use the command on others.");
             }
             else
             {
@@ -961,32 +1172,42 @@ public class UserBuilder
         return response;
     }
 
-    public static EmbedBuilder GetRemoveDataEmbed(User userSettings, string prfx)
+    public static ResponseModel RemoveDataResponse(ContextModel context)
     {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed
+        };
+
         var description = new StringBuilder();
         description.AppendLine("**Are you sure you want to delete all your data from .fmbot?**");
         description.AppendLine("This will remove the following data:");
 
         description.AppendLine("- Account settings like your connected Last.fm account");
 
-        if (userSettings.Friends?.Count > 0)
+        if (context.ContextUser.Friends?.Count > 0)
         {
-            var friendString = userSettings.Friends?.Count == 1 ? "friend" : "friends";
-            description.AppendLine($"- `{userSettings.Friends?.Count}` {friendString}");
+            var friendString = context.ContextUser.Friends?.Count == 1 ? "friend" : "friends";
+            description.AppendLine($"- `{context.ContextUser.Friends?.Count}` {friendString}");
         }
 
-        if (userSettings.FriendedByUsers?.Count > 0)
+        if (context.ContextUser.FriendedByUsers?.Count > 0)
         {
-            var friendString = userSettings.FriendedByUsers?.Count == 1 ? "friendlist" : "friendlists";
-            description.AppendLine($"- You from `{userSettings.FriendedByUsers?.Count}` other {friendString}");
+            var friendString = context.ContextUser.FriendedByUsers?.Count == 1 ? "friendlist" : "friendlists";
+            description.AppendLine($"- You from `{context.ContextUser.FriendedByUsers?.Count}` other {friendString}");
         }
 
         description.AppendLine("- All crowns you've gained or lost");
         description.AppendLine("- All featured history");
 
-        if (userSettings.UserType != UserType.User)
+        if (context.ContextUser.DataSource != DataSource.LastFm)
         {
-            description.AppendLine($"- `{userSettings.UserType}` account status");
+            description.AppendLine("- Your Spotify data imports");
+        }
+
+        if (context.ContextUser.UserType != UserType.User)
+        {
+            description.AppendLine($"- `{context.ContextUser.UserType}` account status");
             description.AppendLine("*Account status has to be manually changed back by an .fmbot admin*");
         }
 
@@ -995,21 +1216,66 @@ public class UserBuilder
         description.AppendLine($"Changed Last.fm username? Run `/login`");
         description.AppendLine();
 
-        if (prfx == "/")
+
+        description.AppendLine($"If you still wish to logout, please click the button below.");
+
+        response.Components = new ComponentBuilder().WithButton("Delete my .fmbot account",
+            $"{InteractionConstants.RemoveFmbotAccount}-{context.DiscordUser.Id}", ButtonStyle.Danger);
+
+        response.Embed.WithDescription(description.ToString());
+
+        response.Embed.WithFooter("Note: This will not delete any data from Last.fm, just from .fmbot.");
+
+        response.Embed.WithColor(DiscordConstants.WarningColorOrange);
+
+        return response;
+    }
+
+    public static ResponseModel UserReactionsSupporterRequired(ContextModel context, string prfx)
+    {
+        if (context.ContextUser.UserType != UserType.User)
         {
-            description.AppendLine($"If you still wish to logout, please click 'confirm'.");
+            return null;
         }
-        else
+
+        var response = new ResponseModel
         {
-            description.AppendLine($"Type `{prfx}remove confirm` to confirm deletion.");
-        }
+            ResponseType = ResponseType.Embed
+        };
 
-        var embed = new EmbedBuilder();
-        embed.WithDescription(description.ToString());
+        response.Embed.WithDescription($"Only supporters can set their own automatic emoji reactions.\n\n" +
+                                        $"[Get supporter here]({Constants.GetSupporterDiscordLink}), or alternatively use the `{prfx}serverreactions` command to set server-wide automatic emoji reactions.");
 
-        embed.WithFooter("Note: This will not delete any data from Last.fm, just from .fmbot.");
+        response.Components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: Constants.GetSupporterDiscordLink);
 
-        return embed;
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+        response.CommandResponse = CommandResponse.SupporterRequired;
+
+        return response;
+    }
+
+    public static ResponseModel UserReactionsAsync(ContextModel context, string prfx)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed
+        };
+
+        var description = new StringBuilder();
+        description.Append(
+            $"Use the `{prfx}userreactions` command for automatic emoji reacts for `fm` and `featured`. ");
+        description.AppendLine("To disable, use without any emojis.");
+        description.AppendLine();
+        description.AppendLine("Make sure that you have a space between each emoji.");
+        description.AppendLine();
+        description.AppendLine("Examples:");
+        description.AppendLine($"`{prfx}userreactions :PagChomp: :PensiveBlob:`");
+        description.AppendLine($"`{prfx}userreactions 😀 😯 🥵`");
+
+        response.Embed.WithDescription(description.ToString());
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+
+        return response;
     }
 
     public static ResponseModel ImportMode(ContextModel context, bool hasImported = false)
@@ -1054,13 +1320,13 @@ public class UserBuilder
 
         embedDescription.AppendLine("**Full Spotify, then Last.fm**");
         embedDescription.AppendLine("- Uses your full Spotify history and adds Last.fm afterwards");
-        embedDescription.AppendLine("- Recommended if you have imported Spotify on Last.fm before");
+        embedDescription.AppendLine("- Recommended if you have imported Spotify onto Last.fm before");
         embedDescription.AppendLine("- Plays from other music apps you scrobbled to Last.fm will not be included");
         embedDescription.AppendLine();
 
-        embedDescription.AppendLine("**Spotify until Last.fm**");
+        embedDescription.AppendLine("**Spotify until full Last.fm**");
         embedDescription.AppendLine("- Uses your Spotify history up until the point you started scrobbling on Last.fm");
-        embedDescription.AppendLine("- Do not use this if you have imported on Last.fm before");
+        embedDescription.AppendLine("- Do not use this if you have imported onto Last.fm before");
         embedDescription.AppendLine("- Best if you have scrobbles on Last.fm from sources other then Spotify");
 
         if (!hasImported)

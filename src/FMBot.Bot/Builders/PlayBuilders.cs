@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -19,13 +18,7 @@ using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Domain.Types;
-using FMBot.LastFM.Domain.Types;
-using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
-using Genius.Models.User;
-using Microsoft.Extensions.Options;
-using Swan;
-using Swan.Cryptography;
 using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
 using User = FMBot.Persistence.Domain.Models.User;
 
@@ -36,61 +29,49 @@ public class PlayBuilder
     private readonly CensorService _censorService;
     private readonly GuildService _guildService;
     private readonly IIndexService _indexService;
-    private readonly IPrefixService _prefixService;
     private readonly IUpdateService _updateService;
     private readonly IDataSourceFactory _dataSourceFactory;
     private readonly PlayService _playService;
     private readonly GenreService _genreService;
-    private readonly SettingService _settingService;
     private readonly TimeService _timeService;
     private readonly TrackService _trackService;
     private readonly UserService _userService;
     private readonly CountryService _countryService;
     private readonly WhoKnowsPlayService _whoKnowsPlayService;
-    private readonly WhoKnowsArtistService _whoKnowsArtistService;
-    private readonly WhoKnowsAlbumService _whoKnowsAlbumService;
-    private readonly WhoKnowsTrackService _whoKnowsTrackService;
+    private readonly AlbumService _albumService;
+
     private InteractiveService Interactivity { get; }
 
     public PlayBuilder(
         GuildService guildService,
         IIndexService indexService,
-        IPrefixService prefixService,
         IUpdateService updateService,
         IDataSourceFactory dataSourceFactory,
         PlayService playService,
-        SettingService settingService,
         UserService userService,
         WhoKnowsPlayService whoKnowsPlayService,
         CensorService censorService,
-        WhoKnowsArtistService whoKnowsArtistService,
-        WhoKnowsAlbumService whoKnowsAlbumService,
-        WhoKnowsTrackService whoKnowsTrackService,
         InteractiveService interactivity,
-        IOptions<BotSettings> botSettings,
         TimeService timeService,
         GenreService genreService,
         TrackService trackService,
-        CountryService countryService)
+        CountryService countryService,
+        AlbumService albumService)
     {
         this._guildService = guildService;
         this._indexService = indexService;
         this._dataSourceFactory = dataSourceFactory;
         this._playService = playService;
-        this._prefixService = prefixService;
-        this._settingService = settingService;
         this._updateService = updateService;
         this._userService = userService;
         this._whoKnowsPlayService = whoKnowsPlayService;
         this._censorService = censorService;
-        this._whoKnowsArtistService = whoKnowsArtistService;
-        this._whoKnowsAlbumService = whoKnowsAlbumService;
-        this._whoKnowsTrackService = whoKnowsTrackService;
         this.Interactivity = interactivity;
         this._timeService = timeService;
         this._genreService = genreService;
         this._trackService = trackService;
         this._countryService = countryService;
+        this._albumService = albumService;
     }
 
     public async Task<ResponseModel> NowPlayingAsync(
@@ -131,11 +112,7 @@ public class PlayBuilder
 
         if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
         {
-            var errorEmbed =
-                GenericEmbedService.RecentScrobbleCallFailedBuilder(recentTracks, userSettings.UserNameLastFm);
-            response.Embed = errorEmbed;
-            response.CommandResponse = CommandResponse.LastFmError;
-            return response;
+            return GenericEmbedService.RecentScrobbleCallFailedResponse(recentTracks, userSettings.UserNameLastFm);
         }
 
         var embedType = context.ContextUser.FmEmbedType;
@@ -150,12 +127,19 @@ public class PlayBuilder
                 embedType = guild.FmEmbedType.Value;
             }
 
+            var channel = await this._guildService.GetChannel(context.DiscordChannel.Id);
+            if (channel?.FmEmbedType != null)
+            {
+                embedType = channel.FmEmbedType.Value;
+            }
+
             if (guild != null)
             {
-                await this._indexService.UpdateGuildUser(await context.DiscordGuild.GetUserAsync(context.ContextUser.DiscordUserId),
-                    context.ContextUser.UserId, guild);
-
                 guildUsers = await this._guildService.GetGuildUsers(context.DiscordGuild.Id);
+                var discordGuildUser =
+                    await context.DiscordGuild.GetUserAsync(context.ContextUser.DiscordUserId, CacheMode.CacheOnly);
+
+                await this._indexService.UpdateGuildUser(guildUsers, discordGuildUser, context.ContextUser.UserId, guild);
             }
         }
 
@@ -188,6 +172,11 @@ public class PlayBuilder
 
         switch (embedType)
         {
+            case FmEmbedType.TextOneLine:
+                response.Text = $"**{embedTitle}** is listening to **{currentTrack.TrackName}** by **{currentTrack.ArtistName}**".FilterOutMentions();
+
+                response.ResponseType = ResponseType.Text;
+                break;
             case FmEmbedType.TextMini:
             case FmEmbedType.TextFull:
                 if (embedType == FmEmbedType.TextMini)
@@ -206,8 +195,8 @@ public class PlayBuilder
                     fmText += StringService.TrackToString(previousTrack).FilterOutMentions();
                 }
 
-                fmText +=
-                    $"`{footerText}`";
+                var formattedFooter = footerText.Length == 0 ? "" : $"`{footerText}`";
+                fmText += formattedFooter;
 
                 response.ResponseType = ResponseType.Text;
                 response.Text = fmText;
@@ -273,13 +262,21 @@ public class PlayBuilder
                     response.Embed.WithUrl(recentTracks.Content.UserUrl);
                 }
 
-                if (currentTrack.AlbumCoverUrl != null && embedType != FmEmbedType.EmbedTiny)
+                if (currentTrack.AlbumName != null)
                 {
-                    var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel,
-                        currentTrack.AlbumName, currentTrack.ArtistName, currentTrack.AlbumCoverUrl);
-                    if (safeForChannel == CensorService.CensorResult.Safe)
+                    var dbAlbum =
+                        await this._albumService.GetAlbumFromDatabase(currentTrack.ArtistName, currentTrack.AlbumName);
+
+                    var albumCoverUrl = dbAlbum?.SpotifyImageUrl ?? currentTrack.AlbumCoverUrl;
+
+                    if (albumCoverUrl != null && embedType != FmEmbedType.EmbedTiny)
                     {
-                        response.Embed.WithThumbnailUrl(currentTrack.AlbumCoverUrl);
+                        var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel,
+                            currentTrack.AlbumName, currentTrack.ArtistName, albumCoverUrl);
+                        if (safeForChannel == CensorService.CensorResult.Safe)
+                        {
+                            response.Embed.WithThumbnailUrl(albumCoverUrl);
+                        }
                     }
                 }
 
@@ -291,7 +288,8 @@ public class PlayBuilder
 
     public async Task<ResponseModel> RecentAsync(
         ContextModel context,
-        UserSettingsModel userSettings)
+        UserSettingsModel userSettings,
+        string artistToFilter = null)
     {
         var response = new ResponseModel
         {
@@ -326,10 +324,24 @@ public class PlayBuilder
 
         if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
         {
-            response.Embed = GenericEmbedService.RecentScrobbleCallFailedBuilder(recentTracks, userSettings.UserNameLastFm);
-            response.CommandResponse = CommandResponse.LastFmError;
-            return response;
+            return GenericEmbedService.RecentScrobbleCallFailedResponse(recentTracks, userSettings.UserNameLastFm);
         }
+
+        var limit = SupporterService.IsSupporter(userSettings.UserType) ? int.MaxValue : 240;
+        recentTracks.Content =
+            await this._playService.AddUserPlaysToRecentTracks(userSettings.UserId, recentTracks.Content, limit);
+
+        if (!SupporterService.IsSupporter(userSettings.UserType))
+        {
+            recentTracks.Content.RecentTracks = recentTracks.Content.RecentTracks.Take(239).ToList();
+        }
+
+        if (SupporterService.IsSupporter(userSettings.UserType) && !string.IsNullOrWhiteSpace(artistToFilter))
+        {
+            recentTracks.Content.RecentTracks = recentTracks.Content.RecentTracks
+                .Where(w => artistToFilter.Equals(w.ArtistName, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
 
         var requesterUserTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
         var embedTitle = !userSettings.DifferentUser
@@ -360,7 +372,6 @@ public class PlayBuilder
         var pages = new List<PageBuilder>();
 
         var trackPages = recentTracks.Content.RecentTracks
-            .Take(120)
             .ToList()
             .ChunkBy(6);
         var pageCounter = 1;
@@ -375,11 +386,27 @@ public class PlayBuilder
             }
 
             var footer = new StringBuilder();
+
+            ImportService.AddImportDescription(footer, trackPage.Last().PlaySource);
+
             footer.Append($"Page {pageCounter}/{trackPages.Count}");
             footer.Append($" - {userSettings.UserNameLastFm} has {recentTracks.Content.TotalAmount} scrobbles");
 
+            if (!string.IsNullOrWhiteSpace(artistToFilter))
+            {
+                footer.AppendLine();
+                if (!SupporterService.IsSupporter(userSettings.UserType))
+                {
+                    footer.Append($"Sorry, artist filtering is only available for supporters");
+                }
+                else
+                {
+                    footer.Append($"Filtering plays to artist '{artistToFilter}'");
+                }
+            }
+
             var page = new PageBuilder()
-                .WithDescription(trackPageString.ToString())
+                .WithDescription(StringExtensions.TruncateLongString(trackPageString.ToString(), 4095))
                 .WithAuthor(response.EmbedAuthor)
                 .WithFooter(footer.ToString());
 
@@ -400,7 +427,15 @@ public class PlayBuilder
                 .WithAuthor(response.EmbedAuthor));
         }
 
-        response.StaticPaginator = StringService.BuildSimpleStaticPaginator(pages);
+        if (SupporterService.IsSupporter(userSettings.UserType))
+        {
+            response.StaticPaginator = StringService.BuildStaticPaginator(pages);
+        }
+        else
+        {
+            response.StaticPaginator = StringService.BuildSimpleStaticPaginator(pages);
+        }
+
         response.ResponseType = ResponseType.Paginator;
         return response;
     }
@@ -419,9 +454,7 @@ public class PlayBuilder
 
         if (GenericEmbedService.RecentScrobbleCallFailed(recentTracks))
         {
-            GenericEmbedService.RecentScrobbleCallFailedBuilder(recentTracks, userSettings.UserNameLastFm);
-            response.CommandResponse = CommandResponse.LastFmError;
-            return response;
+            return GenericEmbedService.RecentScrobbleCallFailedResponse(recentTracks, userSettings.UserNameLastFm);
         }
 
         var lastPlays = await this._playService.GetAllUserPlays(userSettings.UserId);
@@ -471,8 +504,7 @@ public class PlayBuilder
     public async Task<ResponseModel> StreakHistoryAsync(
         ContextModel context,
         UserSettingsModel userSettings,
-        bool viewIds = false,
-        long? streakToDelete = null)
+        bool editMode = false)
     {
         var response = new ResponseModel
         {
@@ -493,19 +525,6 @@ public class PlayBuilder
             response.Embed.WithDescription("No saved streaks found for this user.");
             response.ResponseType = ResponseType.Embed;
             response.CommandResponse = CommandResponse.NotFound;
-            return response;
-        }
-
-        if (streakToDelete.HasValue && !userSettings.DifferentUser)
-        {
-            var streak = streaks.FirstOrDefault(f =>
-                f.UserStreakId == streakToDelete && f.UserId == context.ContextUser.UserId);
-            await this._playService.DeleteStreak(streak.UserStreakId);
-
-            response.Embed.WithTitle("🗑 Streak deleted");
-            response.Embed.WithDescription("Successfully deleted the following streak:\n" +
-                                           PlayService.StreakToText(streak, false));
-            response.ResponseType = ResponseType.Embed;
             return response;
         }
 
@@ -534,7 +553,7 @@ public class PlayBuilder
                     pageString.Append($"<t:{((DateTimeOffset)streak.StreakEnded).ToUnixTimeSeconds()}:f>");
                 }
 
-                if (viewIds && !userSettings.DifferentUser)
+                if (editMode && !userSettings.DifferentUser)
                 {
                     pageString.Append($" · Deletion ID: `{streak.UserStreakId}`");
                 }
@@ -550,6 +569,12 @@ public class PlayBuilder
             var pageFooter = new StringBuilder();
             pageFooter.Append($"Page {pageCounter}/{streakPages.Count}");
 
+            if (editMode)
+            {
+                pageFooter.AppendLine();
+                pageFooter.Append($"Editmode enabled - Use the trash button to delete streaks");
+            }
+
             pages.Add(new PageBuilder()
                 .WithDescription(pageString.ToString())
                 .WithAuthor(response.EmbedAuthor)
@@ -557,9 +582,63 @@ public class PlayBuilder
             pageCounter++;
         }
 
-        response.StaticPaginator = StringService.BuildStaticPaginator(pages);
+        if (pages.Count == 1)
+        {
+            response.ResponseType = ResponseType.Embed;
+            response.Embed.Description = pages[0].Description;
+            response.EmbedAuthor = response.EmbedAuthor;
+            response.EmbedFooter = response.EmbedFooter;
 
+            if (editMode)
+            {
+                response.Components = new ComponentBuilder()
+                    .WithButton(emote: new Emoji("🗑️"), customId: InteractionConstants.DeleteStreak);
+            }
 
+            return response;
+        }
+
+        response.StaticPaginator = StringService.BuildStaticPaginator(pages, editMode ? InteractionConstants.DeleteStreak : null, editMode ? new Emoji("🗑️") : null);
+
+        return response;
+    }
+
+    public async Task<ResponseModel> DeleteStreakAsync(
+        ContextModel context,
+        long streakToDelete)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed,
+        };
+
+        var streaks = await this._playService.GetStreaks(context.ContextUser.UserId);
+
+        if (!streaks.Any())
+        {
+            response.Embed.WithDescription("No saved streaks found for you.");
+            response.ResponseType = ResponseType.Embed;
+            response.CommandResponse = CommandResponse.NotFound;
+            return response;
+        }
+
+        var streak = streaks.FirstOrDefault(f =>
+            f.UserStreakId == streakToDelete && f.UserId == context.ContextUser.UserId);
+
+        if (streak == null)
+        {
+            response.Embed.WithDescription("Could not find streak to delete.");
+            response.ResponseType = ResponseType.Embed;
+            response.CommandResponse = CommandResponse.NotFound;
+            return response;
+        }
+
+        await this._playService.DeleteStreak(streak.UserStreakId);
+
+        response.Embed.WithTitle("🗑 Streak deleted");
+        response.Embed.WithDescription("Successfully deleted the following streak:\n" +
+                                       PlayService.StreakToText(streak, false));
+        response.ResponseType = ResponseType.Embed;
         return response;
     }
 
@@ -575,7 +654,8 @@ public class PlayBuilder
 
         await this._updateService.UpdateUser(context.ContextUser);
 
-        var week = await this._playService.GetDailyOverview(userSettings.UserId, amount);
+        var timeZone = TimeZoneInfo.FindSystemTimeZoneById(userSettings.TimeZone ?? "Eastern Standard Time");
+        var week = await this._playService.GetDailyOverview(userSettings.UserId, timeZone, amount);
 
         if (week == null)
         {
@@ -586,7 +666,7 @@ public class PlayBuilder
         }
 
         var description = new StringBuilder();
-        
+
         foreach (var day in week.Days.OrderByDescending(o => o.Date))
         {
             var genreString = new StringBuilder();
@@ -605,7 +685,9 @@ public class PlayBuilder
             }
 
             response.Embed.AddField(
-                $"<t:{day.Date.ToUnixEpochDate()}:D> - {StringExtensions.GetListeningTimeString(day.ListeningTime)} - {day.Playcount} {StringExtensions.GetPlaysString(day.Playcount)}",
+                $"<t:{TimeZoneInfo.ConvertTimeToUtc(day.Date, timeZone).ToUnixEpochDate()}:D> - " +
+                $"{StringExtensions.GetListeningTimeString(day.ListeningTime)} - " +
+                $"{day.Playcount} {StringExtensions.GetPlaysString(day.Playcount)}",
                 $"{genreString}\n" +
                 $"{day.TopArtist}\n" +
                 $"{day.TopAlbum}\n" +
@@ -1008,9 +1090,9 @@ public class PlayBuilder
                     UserPlaycount = s.Count(),
                     FirstPlay = s.OrderBy(o => o.TimePlayed).First().TimePlayed
                 })
-                .Where(w => !knownArtists.Any(a => a.Equals(w.ArtistName)))
+                .Where(w => !knownArtists.Any(a => a.Equals(w.ArtistName, StringComparison.InvariantCultureIgnoreCase)))
                 .OrderByDescending(o => o.UserPlaycount)
-                .Take(10)
+                .Take(8)
                 .ToList();
 
             var newArtistDescription = new StringBuilder();
@@ -1018,9 +1100,9 @@ public class PlayBuilder
             {
                 var newArtist = topNewArtists.OrderBy(o => o.FirstPlay).ToList()[i];
 
-                newArtistDescription.AppendLine($"**[{newArtist.ArtistName}]({LastfmUrlExtensions.GetArtistUrl(newArtist.ArtistName)}) " +
-                                                $"- {newArtist.UserPlaycount}** {StringExtensions.GetPlaysString(newArtist.UserPlaycount)} " +
-                                                $"- On **<t:{newArtist.FirstPlay.Value.ToUnixEpochDate()}:D>**");
+                newArtistDescription.AppendLine($"**[{StringExtensions.TruncateLongString(newArtist.ArtistName, 28)}]({LastfmUrlExtensions.GetArtistUrl(newArtist.ArtistName)})** " +
+                                                $"— *{newArtist.UserPlaycount} {StringExtensions.GetPlaysString(newArtist.UserPlaycount)}* " +
+                                                $"— on **<t:{newArtist.FirstPlay.Value.ToUnixEpochDate()}:D>**");
             }
 
             fields.Add(new EmbedFieldBuilder().WithName("Artist discoveries")
@@ -1032,6 +1114,12 @@ public class PlayBuilder
                 .OrderBy(o => o.TimePlayed)
                 .GroupBy(g => new { g.TimePlayed.Month, g.TimePlayed.Year });
 
+            var totalPlayTime = await this._timeService.GetPlayTimeForPlays(allPlays.Where(w => w.TimePlayed >= filter && w.TimePlayed <= endFilter));
+            monthDescription.AppendLine(
+                $"**`All`** " +
+                $"- **{allPlays.Count(w => w.TimePlayed >= filter && w.TimePlayed <= endFilter)}** plays " +
+                $"- **{StringExtensions.GetLongListeningTimeString(totalPlayTime)}**");
+
             foreach (var month in monthGroups)
             {
                 if (!allPlays.Any(a => a.TimePlayed < DateTime.UtcNow.AddMonths(-month.Key.Month)))
@@ -1041,7 +1129,7 @@ public class PlayBuilder
 
                 var time = await this._timeService.GetPlayTimeForPlays(month);
                 monthDescription.AppendLine(
-                    $"**`{CultureInfo.CurrentCulture.DateTimeFormat.GetMonthName(month.Key.Month)}`** " +
+                    $"**`{CultureInfo.CurrentCulture.DateTimeFormat.GetAbbreviatedMonthName(month.Key.Month)}`** " +
                     $"- **{month.Count()}** plays " +
                     $"- **{StringExtensions.GetLongListeningTimeString(time)}**");
             }

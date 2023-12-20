@@ -5,12 +5,12 @@ using Discord;
 using Discord.Commands;
 using FMBot.Bot.Attributes;
 using FMBot.Bot.Extensions;
+using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Domain;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Models;
 using FMBot.Domain.Types;
-using FMBot.LastFM.Domain.Types;
 using Serilog;
 
 namespace FMBot.Bot.Services;
@@ -57,25 +57,34 @@ public static class GenericEmbedService
 
     private static void NoScrobblesFoundErrorResponse(this EmbedBuilder embed, string userName)
     {
-        embed.WithDescription($"The Last.fm user `{userName}` has no scrobbles/artists/albums/tracks on [their Last.fm profile]({Constants.LastFMUserUrl}{userName}) yet.\n\n" +
-                              $"Just signed up for last.fm and added your account in the bot? Make sure you properly [track your plays](https://www.last.fm/about/trackmymusic) " +
-                              $"and your [Last.fm profile]({Constants.LastFMUserUrl}{userName}) is showing the music that you're listening to. \n" +
-                              $"Usually it takes a few minutes before Last.fm starts working with Spotify after connecting.\n\n" +
-                              $"Please note that .fmbot is **not** affiliated with Last.fm or Spotify.");
+        var description = new StringBuilder();
+        description.AppendLine($"The Last.fm user **{userName}** has no listening history on [their profile]({Constants.LastFMUserUrl}{userName}) yet.");
+        description.AppendLine();
+        description.AppendLine("Just created your Last.fm account? Make sure you set it to [track your music app](https://www.last.fm/about/trackmymusic).");
+        description.AppendLine();
+        description.AppendLine("Using Spotify? You can link that [here](https://www.last.fm/settings/applications). This can take a few minutes to start working.");
+        description.AppendLine();
+        description.AppendLine($"Please note that .fmbot is not affiliated with Last.fm or Spotify.");
 
-        embed.WithColor(DiscordConstants.InformationColorBlue);
+        embed.WithDescription(description.ToString());
+
+        embed.WithColor(DiscordConstants.WarningColorOrange);
+    }
+
+    private static ComponentBuilder NoScrobblesFoundComponents()
+    {
+        return new ComponentBuilder()
+            .WithButton("Track my music app", style: ButtonStyle.Link, url: "https://www.last.fm/about/trackmymusic")
+            .WithButton("Track Spotify", style: ButtonStyle.Link, url: "https://www.last.fm/settings/applications");
     }
 
     public static void ErrorResponse(this EmbedBuilder embed, ResponseStatus? responseStatus, string message, string commandContent, IUser contextUser = null, string expectedResultType = null)
     {
         embed.WithTitle("Problem while contacting Last.fm");
 
-        var issues = "";
         if (PublicProperties.IssuesAtLastFm && PublicProperties.IssuesReason != null)
         {
-            issues = "\n\n" +
-                     "Note:\n" +
-                     $"*\"{PublicProperties.IssuesReason}\"*";
+            embed.AddField("Note from .fmbot staff:", $"*\"{PublicProperties.IssuesReason}\"*");
         }
 
         var loginCommand = PublicProperties.SlashCommands.ContainsKey("login") ? $"</login:{PublicProperties.SlashCommands["login"]}>" : "`/login`";
@@ -84,20 +93,20 @@ public static class GenericEmbedService
         {
             case ResponseStatus.Failure:
                 embed.WithDescription("Can't retrieve data because Last.fm returned an error. Please try again later. \n" +
-                                      $"Please note that .fmbot isn't affiliated with Last.fm.{issues}");
+                                      $"Please note that .fmbot isn't affiliated with Last.fm.");
                 break;
             case ResponseStatus.LoginRequired:
                 embed.WithDescription("Can't retrieve data because your recent tracks are marked as private in your [Last.fm privacy settings](https://www.last.fm/settings/privacy).\n\n" +
                                       $"You can either change this setting or authorize .fmbot to access your private scrobbles with {loginCommand}.\n\n" +
-                                      $"Please note that .fmbot isn't affiliated with Last.fm.{issues}");
+                                      $"Please note that .fmbot isn't affiliated with Last.fm.");
                 break;
             case ResponseStatus.BadAuth:
                 embed.WithDescription("Can't retrieve data because your Last.fm session is expired, invalid or Last.fm is having issues.\n" +
-                                      $"Please try a re-login to the bot with {loginCommand}.{issues}");
+                                      $"Please try a re-login to the bot with {loginCommand}.");
                 break;
             case ResponseStatus.SessionExpired:
                 embed.WithDescription("Can't retrieve data because your Last.fm session is expired or invalid.\n" +
-                                      $"Please re-login to the bot with {loginCommand}.{issues}");
+                                      $"Please re-login to the bot with {loginCommand}.");
                 break;
             case ResponseStatus.MissingParameters:
                 if (expectedResultType != null)
@@ -141,9 +150,7 @@ public static class GenericEmbedService
         {
             embed.ErrorResponse(recentScrobbles.Error, recentScrobbles.Message, context.Message.Content, context.User);
             context.LogCommandUsed(CommandResponse.LastFmError);
-
             await context.Channel.SendMessageAsync("", false, embed.Build());
-
             return true;
         }
 
@@ -151,7 +158,7 @@ public static class GenericEmbedService
         {
             embed.NoScrobblesFoundErrorResponse(lastFmUserName);
             context.LogCommandUsed(CommandResponse.NoScrobbles);
-            await context.Channel.SendMessageAsync("", false, embed.Build());
+            await context.Channel.SendMessageAsync("", false, embed.Build(), components: NoScrobblesFoundComponents().Build());
             return true;
         }
 
@@ -171,6 +178,31 @@ public static class GenericEmbedService
         {
             embed.NoScrobblesFoundErrorResponse(lastFmUserName);
             return embed;
+        }
+
+        return null;
+    }
+
+    public static ResponseModel RecentScrobbleCallFailedResponse(Response<RecentTrackList> recentScrobbles, string lastFmUserName)
+    {
+        var errorResponse = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed
+        };
+
+        if (recentScrobbles.Content?.RecentTracks == null || !recentScrobbles.Success)
+        {
+            errorResponse.Embed.ErrorResponse(recentScrobbles.Error, recentScrobbles.Message, null);
+            errorResponse.CommandResponse = CommandResponse.LastFmError;
+            return errorResponse;
+        }
+
+        if (!recentScrobbles.Content.RecentTracks.Any())
+        {
+            errorResponse.Embed.NoScrobblesFoundErrorResponse(lastFmUserName);
+            errorResponse.CommandResponse = CommandResponse.NoScrobbles;
+            errorResponse.Components = NoScrobblesFoundComponents();
+            return errorResponse;
         }
 
         return null;

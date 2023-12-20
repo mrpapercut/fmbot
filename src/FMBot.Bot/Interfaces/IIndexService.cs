@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
 using FMBot.Bot.Models;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 
@@ -15,6 +16,10 @@ public interface IIndexService
 
     Task<IndexedUserStats> IndexUser(User user);
 
+    Task<IndexedUserStats> ModularUpdate(User user, UpdateType updateType);
+
+    bool IndexStarted(int userId);
+
     Task RecalculateTopLists(User user);
 
     Task<GuildUser> GetOrAddUserToGuild(
@@ -25,9 +30,10 @@ public interface IIndexService
 
     Task AddGuildUserToDatabase(GuildUser guildUserToAdd);
 
-    Task UpdateGuildUser(IGuildUser discordGuildUser, int userId, Guild guildId);
+    Task UpdateGuildUser(IDictionary<int, FullGuildUser> fullGuildUsers, IGuildUser discordGuildUser, int userId,
+        Guild guildId);
 
-    Task AddOrUpdateGuildUser(IGuildUser discordGuildUser);
+    Task AddOrUpdateGuildUser(IGuildUser discordGuildUser, bool checkIfRegistered = true);
 
     Task RemoveUserFromGuild(ulong discordUserId, ulong discordGuildId);
 

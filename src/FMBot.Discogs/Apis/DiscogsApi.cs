@@ -134,7 +134,7 @@ public class DiscogsApi
                 var pageResponse = await client.ExecuteAsync<DiscogsUserReleases>(request);
                 Statistics.DiscogsApiCalls.Inc();
 
-                if (pageResponse.Data != null && pageResponse.Data.Releases.Any())
+                if (pageResponse.Data?.Releases != null && pageResponse.Data.Releases.Any())
                 {
                     response.Data.Releases.AddRange(pageResponse.Data.Releases);
 
@@ -160,6 +160,22 @@ public class DiscogsApi
 
         var response = await client.ExecuteAsync<DiscogsCollectionValue>(request);
         Statistics.DiscogsApiCalls.Inc();
+
+        return response.Data;
+    }
+
+    public async Task<DiscogsFullRelease> GetRelease(DiscogsAuth discogsAuth, int releaseId)
+    {
+        var client = GetClient(discogsAuth);
+        var request = new RestRequest($"releases/{releaseId}");
+
+        var response = await client.ExecuteAsync<DiscogsFullRelease>(request);
+        Statistics.DiscogsApiCalls.Inc();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
 
         return response.Data;
     }

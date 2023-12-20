@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using Dapper;
 using Discord;
 using Discord.Commands;
+using Discord.Interactions;
+using Discord.WebSocket;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
@@ -14,7 +16,6 @@ using FMBot.Domain.Attributes;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using FMBot.Persistence.Repositories;
@@ -32,7 +33,6 @@ public class UserService
     private readonly IDbContextFactory<FMBotDbContext> _contextFactory;
     private readonly IDataSourceFactory _dataSourceFactory;
     private readonly BotSettings _botSettings;
-    private readonly ArtistRepository _artistRepository;
     private readonly CountryService _countryService;
     private readonly PlayService _playService;
 
@@ -40,14 +40,12 @@ public class UserService
         IDbContextFactory<FMBotDbContext> contextFactory,
         IDataSourceFactory dataSourceFactory,
         IOptions<BotSettings> botSettings,
-        ArtistRepository artistRepository,
         CountryService countryService,
         PlayService playService)
     {
         this._cache = cache;
         this._contextFactory = contextFactory;
         this._dataSourceFactory = dataSourceFactory;
-        this._artistRepository = artistRepository;
         this._countryService = countryService;
         this._playService = playService;
         this._botSettings = botSettings.Value;
@@ -60,9 +58,9 @@ public class UserService
 
     public async Task<User> GetUserAsync(ulong discordUserId)
     {
-        var cacheKey = UserCacheKey(discordUserId);
+        var discordUserIdCacheKey = UserDiscordIdCacheKey(discordUserId);
 
-        if (this._cache.TryGetValue(cacheKey, out User user))
+        if (this._cache.TryGetValue(discordUserIdCacheKey, out User user))
         {
             return user;
         }
@@ -74,15 +72,29 @@ public class UserService
 
         if (user != null)
         {
-            this._cache.Set(cacheKey, user, TimeSpan.FromSeconds(3));
+            var lastFmCacheKey = UserLastFmCacheKey(user.UserNameLastFM);
+
+            this._cache.Set(lastFmCacheKey, user, TimeSpan.FromSeconds(5));
+            this._cache.Set(discordUserIdCacheKey, user, TimeSpan.FromSeconds(5));
         }
 
         return user;
     }
 
-    private static string UserCacheKey(ulong discordUserId)
+    public void RemoveUserFromCache(User user)
+    {
+        this._cache.Remove(UserDiscordIdCacheKey(user.DiscordUserId));
+        this._cache.Remove(UserLastFmCacheKey(user.UserNameLastFM));
+    }
+
+    public static string UserDiscordIdCacheKey(ulong discordUserId)
     {
         return $"user-{discordUserId}";
+    }
+
+    public static string UserLastFmCacheKey(string userNameLastFm)
+    {
+        return $"user-{userNameLastFm.ToLower()}";
     }
 
     public async Task<User> GetUserForIdAsync(int userId)
@@ -122,7 +134,16 @@ public class UserService
     {
         var user = await GetUserSettingsAsync(discordUser);
 
-        return !string.IsNullOrEmpty(user.SessionKeyLastFm);
+        return !string.IsNullOrEmpty(user?.SessionKeyLastFm);
+    }
+
+    public async Task<Dictionary<int, User>> GetMultipleUsers(HashSet<int> userIds)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        return await db.Users
+            .AsNoTracking()
+            .Where(w => userIds.Contains(w.UserId))
+            .ToDictionaryAsync(d => d.UserId, d => d);
     }
 
     public async Task UpdateUserLastUsedAsync(ulong discordUserId)
@@ -149,6 +170,161 @@ public class UserService
         }
     }
 
+    public async Task AddUserTextCommandInteraction(ShardedCommandContext context, string commandName)
+    {
+        var user = await GetUserSettingsAsync(context.User);
+
+        await Task.Delay(12000);
+
+        try
+        {
+            if (user != null)
+            {
+                var commandResponse = CommandResponse.Ok;
+                if (PublicProperties.UsedCommandsResponses.TryGetValue(context.Message.Id, out var fetchedResponse))
+                {
+                    commandResponse = fetchedResponse;
+                }
+
+                string errorReference = null;
+                if (PublicProperties.UsedCommandsErrorReferences.TryGetValue(context.Message.Id, out var fetchedErrorId))
+                {
+                    errorReference = fetchedErrorId;
+                }
+
+                string artist = null;
+                if (PublicProperties.UsedCommandsArtists.TryGetValue(context.Message.Id, out var fetchedArtist))
+                {
+                    artist = fetchedArtist;
+                }
+
+                string album = null;
+                if (PublicProperties.UsedCommandsAlbums.TryGetValue(context.Message.Id, out var fetchedAlbum))
+                {
+                    album = fetchedAlbum;
+                }
+
+                string track = null;
+                if (PublicProperties.UsedCommandsTracks.TryGetValue(context.Message.Id, out var fetchedTrack))
+                {
+                    track = fetchedTrack;
+                }
+
+                var interaction = new UserInteraction
+                {
+                    Timestamp = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
+                    CommandContent = context.Message.Content,
+                    CommandName = commandName,
+                    UserId = user.UserId,
+                    DiscordGuildId = context.Guild?.Id,
+                    DiscordChannelId = context.Channel?.Id,
+                    DiscordId = context.Message.Id,
+                    Response = commandResponse,
+                    Type = UserInteractionType.TextCommand,
+                    ErrorReferenceId = errorReference,
+                    Artist = artist,
+                    Album = album,
+                    Track = track
+                };
+
+                await using var db = await this._contextFactory.CreateDbContextAsync();
+                await db.UserInteractions.AddAsync(interaction);
+                await db.SaveChangesAsync();
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Error(e, "AddUserTextCommandInteraction: Error while adding user interaction");
+        }
+    }
+
+    public async Task AddUserSlashCommandInteraction(ShardedInteractionContext context, string commandName)
+    {
+        var user = await GetUserSettingsAsync(context.User);
+
+        await Task.Delay(12000);
+
+        try
+        {
+            if (user != null)
+            {
+                var commandResponse = CommandResponse.Ok;
+                if (PublicProperties.UsedCommandsResponses.TryGetValue(context.Interaction.Id, out var fetchedResponse))
+                {
+                    commandResponse = fetchedResponse;
+                }
+
+                string errorReference = null;
+                if (PublicProperties.UsedCommandsErrorReferences.TryGetValue(context.Interaction.Id, out var fetchedErrorId))
+                {
+                    errorReference = fetchedErrorId;
+                }
+
+                string artist = null;
+                if (PublicProperties.UsedCommandsArtists.TryGetValue(context.Interaction.Id, out var fetchedArtist))
+                {
+                    artist = fetchedArtist;
+                }
+
+                string album = null;
+                if (PublicProperties.UsedCommandsAlbums.TryGetValue(context.Interaction.Id, out var fetchedAlbum))
+                {
+                    album = fetchedAlbum;
+                }
+
+                string track = null;
+                if (PublicProperties.UsedCommandsTracks.TryGetValue(context.Interaction.Id, out var fetchedTrack))
+                {
+                    track = fetchedTrack;
+                }
+
+                var options = new Dictionary<string, string>();
+                if (context.Interaction is SocketSlashCommand command)
+                {
+                    foreach (var option in command.Data.Options)
+                    {
+                        options.Add(option.Name, option.Value?.ToString());
+                    }
+                }
+
+                var interaction = new UserInteraction
+                {
+                    Timestamp = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
+                    CommandName = commandName,
+                    CommandOptions = options.Any() ? options : null,
+                    UserId = user.UserId,
+                    DiscordGuildId = context.Guild?.Id,
+                    DiscordChannelId = context.Channel?.Id,
+                    DiscordId = context.Interaction.Id,
+                    Response = commandResponse,
+                    Type = UserInteractionType.SlashCommand,
+                    ErrorReferenceId = errorReference,
+                    Artist = artist,
+                    Album = album,
+                    Track = track
+                };
+
+                await using var db = await this._contextFactory.CreateDbContextAsync();
+                await db.UserInteractions.AddAsync(interaction);
+                await db.SaveChangesAsync();
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Error(e, "AddUserSlashCommandInteraction: Error while adding user interaction");
+        }
+    }
+
+    public async Task<int> GetCommandExecutedAmount(int userId, string command, DateTime filterDateTime)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        return await db.UserInteractions
+            .CountAsync(c => c.UserId == userId &&
+                             c.Timestamp >= filterDateTime &&
+                             c.Response == CommandResponse.Ok &&
+                             c.CommandName == command);
+    }
+
     public async Task SetUserReactionsAsync(int userId, string[] reactions)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -162,7 +338,7 @@ public class UserService
 
         await db.SaveChangesAsync();
 
-        this._cache.Remove(UserCacheKey(user.DiscordUserId));
+        RemoveUserFromCache(user);
     }
 
     public async Task<User> GetUserWithFriendsAsync(IUser discordUser)
@@ -296,7 +472,7 @@ public class UserService
 
         if (footerOptions.HasFlag(FmFooterOption.ArtistCountry) || footerOptions.HasFlag(FmFooterOption.ArtistBirthday) || footerOptions.HasFlag(FmFooterOption.ArtistGenres))
         {
-            var artist = await this._artistRepository.GetArtistForName(artistName, connection, footerOptions.HasFlag(FmFooterOption.ArtistGenres));
+            var artist = await ArtistRepository.GetArtistForName(artistName, connection, footerOptions.HasFlag(FmFooterOption.ArtistGenres));
 
             if (footerOptions.HasFlag(FmFooterOption.ArtistCountry) && !string.IsNullOrWhiteSpace(artist?.CountryCode))
             {
@@ -317,16 +493,18 @@ public class UserService
                 if (artist.StartDate.Value.Month == DateTime.Today.Month &&
                     artist.StartDate.Value.Day == DateTime.Today.Day)
                 {
-                    options.Add($"🎂 today! ({age})");
+                    options.Add(!artist.EndDate.HasValue ? $"🎂 today! ({age})" : "🎂 today!");
                 }
                 else if (artist.StartDate.Value.Month == DateTime.Today.AddDays(-1).Month &&
                          artist.StartDate.Value.Day == DateTime.Today.AddDays(-1).Day)
                 {
-                    options.Add($"🎂 tomorrow (becomes {age + 1})");
+                    options.Add(!artist.EndDate.HasValue ? $"🎂 tomorrow (becomes {age + 1})" : "🎂 tomorrow");
                 }
                 else
                 {
-                    options.Add($"🎂 {artist.StartDate.Value.ToString("MMMM d")} (currently {age})");
+                    options.Add(!artist.EndDate.HasValue
+                        ? $"🎂 {artist.StartDate.Value.ToString("MMMM d")} (currently {age})"
+                        : $"🎂 {artist.StartDate.Value.ToString("MMMM d")}");
                 }
             }
 
@@ -381,11 +559,11 @@ public class UserService
             if (discogsUser.UserDiscogs != null && discogsUser.DiscogsReleases.Any())
             {
                 var albumCollection = discogsUser.DiscogsReleases.Where(w =>
-                    (w.Release.Title.ToLower().StartsWith(albumName.ToLower()) ||
-                     albumName.ToLower().StartsWith(w.Release.Title.ToLower()))
+                    (w.Release.Title.StartsWith(albumName, StringComparison.OrdinalIgnoreCase) ||
+                     albumName.StartsWith(w.Release.Title, StringComparison.OrdinalIgnoreCase))
                     &&
-                    (w.Release.Artist.ToLower().StartsWith(artistName.ToLower()) ||
-                     artistName.ToLower().StartsWith(w.Release.Artist.ToLower()))).ToList();
+                    (w.Release.Artist.StartsWith(artistName, StringComparison.OrdinalIgnoreCase) ||
+                     artistName.StartsWith(w.Release.Artist, StringComparison.OrdinalIgnoreCase))).ToList();
 
                 var discogsAlbum = albumCollection.MaxBy(o => o.DateAdded);
 
@@ -489,7 +667,9 @@ public class UserService
 
                 if (requestedUser != null)
                 {
-                    var index = artistListeners.IndexOf(requestedUser);
+                    var lastListenerWithPlaycount = artistListeners.LastOrDefault(l => l.Playcount == requestedUser.Playcount);
+
+                    var index = artistListeners.IndexOf(lastListenerWithPlaycount);
                     options.Add($"GlobalWhoKnows #{index + 1}");
                 }
             }
@@ -505,7 +685,9 @@ public class UserService
 
                 if (requestedUser != null)
                 {
-                    var index = albumListeners.IndexOf(requestedUser);
+                    var lastListenerWithPlaycount = albumListeners.LastOrDefault(l => l.Playcount == requestedUser.Playcount);
+
+                    var index = albumListeners.IndexOf(lastListenerWithPlaycount);
                     options.Add($"GlobalWhoKnows album #{index + 1}");
                 }
             }
@@ -521,7 +703,9 @@ public class UserService
 
                 if (requestedUser != null)
                 {
-                    var index = trackListeners.IndexOf(requestedUser);
+                    var lastListenerWithPlaycount = trackListeners.LastOrDefault(l => l.Playcount == requestedUser.Playcount);
+
+                    var index = trackListeners.IndexOf(lastListenerWithPlaycount);
                     options.Add($"GlobalWhoKnows track #{index + 1}");
                 }
             }
@@ -534,7 +718,7 @@ public class UserService
                     await this._playService.GetArtistFirstPlayDate(userSettings.UserId, artistName);
                 if (firstPlay != null)
                 {
-                    options.Add($"Artist first listened {firstPlay.Value.ToString("MMMM d yyyy")}");
+                    options.Add($"Artist discovered {firstPlay.Value.ToString("MMMM d yyyy")}");
                 }
             }
             if (footerOptions.HasFlag(FmFooterOption.FirstAlbumListen) && albumName != null)
@@ -543,7 +727,7 @@ public class UserService
                     await this._playService.GetAlbumFirstPlayDate(userSettings.UserId, artistName, albumName);
                 if (firstPlay != null)
                 {
-                    options.Add($"Album first listened {firstPlay.Value.ToString("MMMM d yyyy")}");
+                    options.Add($"Album discovered {firstPlay.Value.ToString("MMMM d yyyy")}");
                 }
             }
             if (footerOptions.HasFlag(FmFooterOption.FirstTrackListen))
@@ -552,7 +736,7 @@ public class UserService
                     await this._playService.GetTrackFirstPlayDate(userSettings.UserId, artistName, trackName);
                 if (firstPlay != null)
                 {
-                    options.Add($"First listened {firstPlay.Value.ToString("MMMM d yyyy")}");
+                    options.Add($"Track discovered {firstPlay.Value.ToString("MMMM d yyyy")}");
                 }
             }
         }
@@ -632,42 +816,90 @@ public class UserService
             return (false, description.ToString());
         }
 
-        description.AppendLine($"✅ {user.UserNameLastFM} has been fully updated.");
-        description.AppendLine();
-        description.AppendLine("Cached the following playcounts:");
-        if (user.UserType == UserType.User)
+        if (stats.UpdateError == true)
         {
-            description.AppendLine($"- Last **{stats.PlayCount}** plays");
-            description.AppendLine($"- Top **{stats.ArtistCount}** artists");
-            description.AppendLine($"- Top **{stats.AlbumCount}** albums");
-            description.AppendLine($"- Top **{stats.TrackCount}** tracks");
+            description.AppendLine($"❌ An error occurred while attempting to update `{user.UserNameLastFM}`:");
+            if (stats.FailedUpdates.HasFlag(UpdateType.Full))
+            {
+                description.AppendLine($"- Could not fetch user info from Last.fm");
+            }
+            if (stats.FailedUpdates.HasFlag(UpdateType.Artist))
+            {
+                description.AppendLine($"- Could not fetch top artists");
+            }
+            if (stats.FailedUpdates.HasFlag(UpdateType.Albums))
+            {
+                description.AppendLine($"- Could not fetch top albums");
+            }
+            if (stats.FailedUpdates.HasFlag(UpdateType.Tracks))
+            {
+                description.AppendLine($"- Could not fetch top tracks");
+            }
         }
         else
         {
-            description.AppendLine($"- **{stats.PlayCount}** plays");
-            description.AppendLine($"- **{stats.ArtistCount}** top artists");
-            description.AppendLine($"- **{stats.AlbumCount}** top albums");
-            description.AppendLine($"- **{stats.TrackCount}** top tracks");
+            description.AppendLine($"✅ `{user.UserNameLastFM}` has been fully updated.");
+            description.AppendLine();
+            description.AppendLine("Cached the following playcounts:");
 
-            if (stats.ImportCount != null)
+            if (user.UserType == UserType.User)
+            {
+                if (stats.PlayCount.HasValue)
+                {
+                    description.AppendLine($"- Last **{stats.PlayCount}** plays");
+                }
+                if (stats.ArtistCount.HasValue)
+                {
+                    description.AppendLine($"- Top **{stats.ArtistCount}** artists");
+                }
+                if (stats.AlbumCount.HasValue)
+                {
+                    description.AppendLine($"- Top **{stats.AlbumCount}** albums");
+                }
+                if (stats.TrackCount.HasValue)
+                {
+                    description.AppendLine($"- Top **{stats.TrackCount}** tracks");
+                }
+            }
+            else
+            {
+                if (stats.PlayCount.HasValue)
+                {
+                    description.AppendLine($"- **{stats.PlayCount}** Last.fm plays");
+                }
+                if (stats.ArtistCount.HasValue)
+                {
+                    description.AppendLine($"- **{stats.ArtistCount}** top artists");
+                }
+                if (stats.AlbumCount.HasValue)
+                {
+                    description.AppendLine($"- **{stats.AlbumCount}** top albums");
+                }
+                if (stats.TrackCount.HasValue)
+                {
+                    description.AppendLine($"- **{stats.TrackCount}** top tracks");
+                }
+
+                if (stats.ImportCount != null)
+                {
+                    description.AppendLine();
+
+                    var name = user.DataSource.GetAttribute<OptionAttribute>().Name;
+                    description.AppendLine($"Import setting: {name}");
+                    description.AppendLine($"Combined with your **{stats.ImportCount}** imported plays you have a total of **{stats.TotalCount}** plays.");
+                }
+            }
+
+            if (user.UserType == UserType.User &&
+                (stats.PlayCount >= 49900 ||
+                 stats.TrackCount >= 5900 ||
+                 stats.AlbumCount >= 4900 ||
+                 stats.ArtistCount >= 3900))
             {
                 description.AppendLine();
-
-                var name = user.DataSource.GetAttribute<OptionAttribute>().Name;
-                description.AppendLine($"Import setting: {name}");
-                description.AppendLine($"Combined with your **{stats.ImportCount}** imported plays you have a total of **{stats.TotalCount}** plays.");
+                description.AppendLine($"Want your full Last.fm history to be stored in the bot? [{Constants.GetSupporterButton}]({Constants.GetSupporterDiscordLink}).");
+                promo = true;
             }
-        }
-
-        if (user.UserType == UserType.User &&
-            (stats.PlayCount >= 24900 ||
-             stats.TrackCount >= 5900 ||
-             stats.AlbumCount >= 4900 ||
-             stats.ArtistCount >= 3900))
-        {
-            description.AppendLine();
-            description.AppendLine($"Want your full Last.fm history to be stored in the bot? [{Constants.GetSupporterButton}]({Constants.GetSupporterDiscordLink}).");
-            promo = true;
         }
 
         return (promo, description.ToString());
@@ -725,9 +957,9 @@ public class UserService
             db.Update(user);
 
             await db.SaveChangesAsync();
-        }
 
-        this._cache.Remove(UserCacheKey(discordUser.Id));
+            RemoveUserFromCache(user);
+        }
     }
 
     public async Task<bool> GetAndStoreAuthSession(IUser contextUser, string token)
@@ -769,28 +1001,6 @@ public class UserService
         return false;
     }
 
-    public async Task<PrivacyLevel> SetPrivacy(User userToUpdate, string[] extraOptions)
-    {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-
-        if (extraOptions.Contains("global") || extraOptions.Contains("Global"))
-        {
-            userToUpdate.PrivacyLevel = PrivacyLevel.Global;
-        }
-        else if (extraOptions.Contains("server") || extraOptions.Contains("Server"))
-        {
-            userToUpdate.PrivacyLevel = PrivacyLevel.Server;
-        }
-
-        db.Update(userToUpdate);
-
-        await db.SaveChangesAsync();
-
-        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
-
-        return userToUpdate.PrivacyLevel;
-    }
-
     public async Task<PrivacyLevel> SetPrivacyLevel(int userId, PrivacyLevel privacyLevel)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -803,24 +1013,26 @@ public class UserService
 
         await db.SaveChangesAsync();
 
-        this._cache.Remove(UserCacheKey(user.DiscordUserId));
+        RemoveUserFromCache(user);
 
         return user.PrivacyLevel;
     }
 
-    public static User SetWkMode(User userSettings, string[] extraOptions)
+    public async Task<string> SetTimeZone(int userId, string timeZone)
     {
-        extraOptions = extraOptions.Select(s => s.ToLower()).ToArray();
-        if (extraOptions.Contains("image") || extraOptions.Contains("img"))
-        {
-            userSettings.Mode = WhoKnowsMode.Image;
-        }
-        else if (extraOptions.Contains("embed") || extraOptions.Contains("embd"))
-        {
-            userSettings.Mode = WhoKnowsMode.Embed;
-        }
+        await using var db = await this._contextFactory.CreateDbContextAsync();
 
-        return userSettings;
+        var user = await db.Users.FirstAsync(f => f.UserId == userId);
+
+        user.TimeZone = timeZone;
+
+        db.Update(user);
+
+        await db.SaveChangesAsync();
+
+        RemoveUserFromCache(user);
+
+        return user.TimeZone;
     }
 
     public async Task<User> SetSettings(User userToUpdate, FmEmbedType embedType, FmCountType? countType)
@@ -834,7 +1046,7 @@ public class UserService
 
         await db.SaveChangesAsync();
 
-        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+        RemoveUserFromCache(userToUpdate);
 
         return user;
     }
@@ -850,7 +1062,7 @@ public class UserService
 
         await db.SaveChangesAsync();
 
-        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+        RemoveUserFromCache(userToUpdate);
 
         return user;
     }
@@ -866,12 +1078,12 @@ public class UserService
 
         await db.SaveChangesAsync();
 
-        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+        RemoveUserFromCache(user);
 
         return user;
     }
 
-    public async Task<User> SetWkMode(User userToUpdate, WhoKnowsMode mode)
+    public async Task<User> SetResponseMode(User userToUpdate, ResponseMode mode)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
         var user = await db.Users.FirstAsync(f => f.UserId == userToUpdate.UserId);
@@ -882,12 +1094,11 @@ public class UserService
 
         await db.SaveChangesAsync();
 
-        this._cache.Remove(UserCacheKey(userToUpdate.DiscordUserId));
+        RemoveUserFromCache(user);
 
         return user;
     }
 
-    // Remove user
     public async Task DeleteUser(int userId)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -915,9 +1126,11 @@ public class UserService
 
             await db.SaveChangesAsync();
 
-            this._cache.Remove(UserCacheKey(user.DiscordUserId));
+            RemoveUserFromCache(user);
 
             PublicProperties.RegisteredUsers.TryRemove(user.DiscordUserId, out _);
+
+            Log.Information("Deleted user {userId} - {discordUserId} - {userNameLastFm}", user.UserId, user.DiscordUserId, user.UserNameLastFM);
         }
         catch (Exception e)
         {
@@ -929,22 +1142,24 @@ public class UserService
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
 
-        if (user.RymEnabled != true)
+        var userToUpdate = await db.Users.FindAsync(user.UserId);
+
+        if (userToUpdate.RymEnabled != true)
         {
-            user.RymEnabled = true;
+            userToUpdate.RymEnabled = true;
         }
         else
         {
-            user.RymEnabled = false;
+            userToUpdate.RymEnabled = false;
         }
 
-        db.Update(user);
+        db.Update(userToUpdate);
 
         await db.SaveChangesAsync();
 
-        this._cache.Remove(UserCacheKey(user.DiscordUserId));
+        RemoveUserFromCache(userToUpdate);
 
-        return user.RymEnabled;
+        return userToUpdate.RymEnabled;
     }
 
     public async Task ToggleBotScrobblingAsync(int userId, bool? disabled)
@@ -957,7 +1172,7 @@ public class UserService
 
         db.Update(user);
 
-        this._cache.Remove(UserCacheKey(user.DiscordUserId));
+        RemoveUserFromCache(user);
 
         await db.SaveChangesAsync();
     }

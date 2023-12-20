@@ -2,6 +2,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System;
 using System.Collections.Generic;
+using Discord.Commands;
 using Discord.Interactions;
 using FMBot.Bot.Builders;
 using FMBot.Bot.Extensions;
@@ -14,20 +15,22 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using Discord.WebSocket;
 using FMBot.Bot.Models.Modals;
-using Discord.Commands;
 using FMBot.Bot.Attributes;
 using FMBot.Bot.Services.WhoKnows;
 using Microsoft.Extensions.Options;
+using FMBot.Domain.Enums;
+using Discord;
 
 namespace FMBot.Bot.SlashCommands;
 
-public class SettingSlashCommands : InteractionModuleBase
+public class GuildSettingSlashCommands : InteractionModuleBase
 {
     private readonly UserService _userService;
 
     private readonly GuildSettingBuilder _guildSettingBuilder;
     private readonly IPrefixService _prefixService;
     private readonly GuildService _guildService;
+    private readonly GuildBuilders _guildBuilders;
 
     private readonly CommandService _commands;
 
@@ -40,7 +43,7 @@ public class SettingSlashCommands : InteractionModuleBase
 
     private InteractiveService Interactivity { get; }
 
-    public SettingSlashCommands(
+    public GuildSettingSlashCommands(
         GuildSettingBuilder guildSettingBuilder,
         InteractiveService interactivity,
         UserService userService,
@@ -50,7 +53,9 @@ public class SettingSlashCommands : InteractionModuleBase
         ChannelDisabledCommandService channelDisabledCommandService,
         DisabledChannelService disabledChannelService,
         GuildDisabledCommandService guildDisabledCommandService,
-        IOptions<BotSettings> botSettings, CrownService crownService)
+        IOptions<BotSettings> botSettings,
+        CrownService crownService,
+        GuildBuilders guildBuilders)
     {
         this._guildSettingBuilder = guildSettingBuilder;
         this.Interactivity = interactivity;
@@ -62,6 +67,7 @@ public class SettingSlashCommands : InteractionModuleBase
         this._disabledChannelService = disabledChannelService;
         this._guildDisabledCommandService = guildDisabledCommandService;
         this._crownService = crownService;
+        this._guildBuilders = guildBuilders;
         this._botSettings = botSettings.Value;
     }
 
@@ -78,6 +84,70 @@ public class SettingSlashCommands : InteractionModuleBase
             var response = await this._guildSettingBuilder.GetGuildSettings(new ContextModel(this.Context, contextUser), guildPermissions);
 
             await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [SlashCommand("members", "Shows server members that use .fmbot")]
+    [RequiresIndex]
+    [GuildOnly]
+    public async Task MemberOverviewAsync(
+        [Discord.Interactions.Summary("View", "Statistic you want to view")] GuildViewType viewType)
+    {
+        try
+        {
+            _ = DeferAsync();
+
+            var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+            var guild = await this._guildService.GetGuildAsync(this.Context.Guild.Id);
+
+            var response = await this._guildBuilders.MemberOverviewAsync(new ContextModel(this.Context, contextUser), guild, viewType);
+
+            await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [ComponentInteraction(InteractionConstants.GuildMembers)]
+    [RequiresIndex]
+    [GuildOnly]
+    public async Task MemberOverviewAsync(string[] inputs)
+    {
+        try
+        {
+            _ = DeferAsync();
+
+            if (!Enum.TryParse(inputs.First(), out GuildViewType viewType))
+            {
+                return;
+            }
+
+            var message = (this.Context.Interaction as SocketMessageComponent)?.Message;
+            if (message == null)
+            {
+                return;
+            }
+
+            var name = viewType.GetAttribute<ChoiceDisplayAttribute>().Name;
+
+            var components =
+                new ComponentBuilder().WithButton($"Loading {name.ToLower()} view...", customId: "1", emote: Emote.Parse("<a:loading:821676038102056991>"), disabled: true, style: ButtonStyle.Secondary);
+            await message.ModifyAsync(m => m.Components = components.Build());
+
+            var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+            var guild = await this._guildService.GetGuildAsync(this.Context.Guild.Id);
+
+            var response = await this._guildBuilders.MemberOverviewAsync(new ContextModel(this.Context, contextUser), guild, viewType);
+
+            await this.Context.UpdateInteractionEmbed(response, this.Interactivity);
             this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
@@ -268,11 +338,40 @@ public class SettingSlashCommands : InteractionModuleBase
         else
         {
             await this._guildService.ChangeGuildSettingAsync(this.Context.Guild, null);
-
         }
 
         var response = await this._guildSettingBuilder.GuildMode(new ContextModel(this.Context), this.Context.User);
 
+        await this.Context.UpdateInteractionEmbed(response);
+    }
+
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandChannelFmType}-*-*")]
+    [ServerStaffOnly]
+    public async Task SetChannelEmbedType(string channelId, string categoryId, string[] inputs)
+    {
+        var parsedChannelId = ulong.Parse(channelId);
+        var parsedCategoryId = ulong.Parse(categoryId);
+
+        if (!await this._guildSettingBuilder.UserIsAllowed(new ContextModel(this.Context)))
+        {
+            await GuildSettingBuilder.UserNotAllowedResponse(this.Context);
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+            return;
+        }
+
+        var guild = await this._guildService.GetGuildAsync(this.Context.Guild.Id);
+        var selectedChannel = await this.Context.Guild.GetChannelAsync(parsedChannelId);
+
+        if (Enum.TryParse(inputs.FirstOrDefault(), out FmEmbedType embedType))
+        {
+            await this._guildService.SetChannelEmbedType(selectedChannel, guild.GuildId, embedType, this.Context.Guild.Id);
+        }
+        else
+        {
+            await this._guildService.SetChannelEmbedType(selectedChannel, guild.GuildId, null, this.Context.Guild.Id);
+        }
+
+        var response = await this._guildSettingBuilder.ToggleChannelCommand(new ContextModel(this.Context), parsedChannelId, parsedCategoryId, this.Context.User);
         await this.Context.UpdateInteractionEmbed(response);
     }
 
@@ -409,7 +508,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateInteractionEmbed(response);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleCommandMove}-*-*")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandMove}-*-*")]
     [ServerStaffOnly]
     public async Task ToggleChannelCommandMove(string channelId, string categoryId)
     {
@@ -420,7 +519,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateInteractionEmbed(response);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleCommandAdd}-*-*")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandAdd}-*-*")]
     [ServerStaffOnly]
     public async Task AddDisabledChannelCommand(string channelId, string categoryId)
     {
@@ -431,10 +530,10 @@ public class SettingSlashCommands : InteractionModuleBase
             return;
         }
 
-        await this.Context.Interaction.RespondWithModalAsync<AddDisabledChannelCommandModal>($"{InteractionConstants.ToggleCommandAddModal}-{channelId}-{categoryId}-{message.Id}");
+        await this.Context.Interaction.RespondWithModalAsync<AddDisabledChannelCommandModal>($"{InteractionConstants.ToggleCommand.ToggleCommandAddModal}-{channelId}-{categoryId}-{message.Id}");
     }
 
-    [ModalInteraction($"{InteractionConstants.ToggleCommandAddModal}-*-*-*")]
+    [ModalInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandAddModal}-*-*-*")]
     [ServerStaffOnly]
     public async Task AddDisabledChannelCommand(string channelId, string categoryId, string messageId, AddDisabledChannelCommandModal modal)
     {
@@ -479,7 +578,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateMessageEmbed(response, messageId);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleCommandRemove}-*-*")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandRemove}-*-*")]
     [ServerStaffOnly]
     public async Task RemoveDisabledChannelCommand(string channelId, string categoryId)
     {
@@ -490,10 +589,10 @@ public class SettingSlashCommands : InteractionModuleBase
             return;
         }
 
-        await this.Context.Interaction.RespondWithModalAsync<RemoveDisabledChannelCommandModal>($"{InteractionConstants.ToggleCommandRemoveModal}-{channelId}-{categoryId}-{message.Id}");
+        await this.Context.Interaction.RespondWithModalAsync<RemoveDisabledChannelCommandModal>($"{InteractionConstants.ToggleCommand.ToggleCommandRemoveModal}-{channelId}-{categoryId}-{message.Id}");
     }
 
-    [ModalInteraction($"{InteractionConstants.ToggleCommandRemoveModal}-*-*-*")]
+    [ModalInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandRemoveModal}-*-*-*")]
     [ServerStaffOnly]
     public async Task RemoveDisabledChannelCommand(string channelId, string categoryId, string messageId, RemoveDisabledChannelCommandModal modal)
     {
@@ -530,7 +629,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateMessageEmbed(response, messageId);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleCommandClear}-*-*")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandClear}-*-*")]
     [ServerStaffOnly]
     public async Task ClearDisabledChannelCommand(string channelId, string categoryId)
     {
@@ -546,7 +645,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateInteractionEmbed(response);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleCommandDisableAll}-*-*")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandDisableAll}-*-*")]
     [ServerStaffOnly]
     public async Task DisableChannel(string channelId, string categoryId)
     {
@@ -563,7 +662,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateInteractionEmbed(response);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleCommandEnableAll}-*-*")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleCommandEnableAll}-*-*")]
     [ServerStaffOnly]
     public async Task EnableChannel(string channelId, string categoryId)
     {
@@ -579,7 +678,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateInteractionEmbed(response);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleGuildCommandAdd}")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleGuildCommandAdd}")]
     [ServerStaffOnly]
     public async Task AddDisabledGuildCommand()
     {
@@ -590,10 +689,10 @@ public class SettingSlashCommands : InteractionModuleBase
             return;
         }
 
-        await this.Context.Interaction.RespondWithModalAsync<AddDisabledGuildCommandModal>($"{InteractionConstants.ToggleGuildCommandAddModal}-{message.Id}");
+        await this.Context.Interaction.RespondWithModalAsync<AddDisabledGuildCommandModal>($"{InteractionConstants.ToggleCommand.ToggleGuildCommandAddModal}-{message.Id}");
     }
 
-    [ModalInteraction($"{InteractionConstants.ToggleGuildCommandAddModal}-*")]
+    [ModalInteraction($"{InteractionConstants.ToggleCommand.ToggleGuildCommandAddModal}-*")]
     [ServerStaffOnly]
     public async Task AddDisabledGuildCommand(string messageId, AddDisabledGuildCommandModal modal)
     {
@@ -632,7 +731,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateMessageEmbed(response, messageId);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleGuildCommandRemove}")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleGuildCommandRemove}")]
     [ServerStaffOnly]
     public async Task RemoveDisabledGuildCommand()
     {
@@ -643,10 +742,10 @@ public class SettingSlashCommands : InteractionModuleBase
             return;
         }
 
-        await this.Context.Interaction.RespondWithModalAsync<RemoveDisabledGuildCommandModal>($"{InteractionConstants.ToggleGuildCommandRemoveModal}-{message.Id}");
+        await this.Context.Interaction.RespondWithModalAsync<RemoveDisabledGuildCommandModal>($"{InteractionConstants.ToggleCommand.ToggleGuildCommandRemoveModal}-{message.Id}");
     }
 
-    [ModalInteraction($"{InteractionConstants.ToggleGuildCommandRemoveModal}-*")]
+    [ModalInteraction($"{InteractionConstants.ToggleCommand.ToggleGuildCommandRemoveModal}-*")]
     [ServerStaffOnly]
     public async Task RemoveDisabledChannelCommand(string messageId, RemoveDisabledGuildCommandModal modal)
     {
@@ -679,7 +778,7 @@ public class SettingSlashCommands : InteractionModuleBase
         await this.Context.UpdateMessageEmbed(response, messageId);
     }
 
-    [ComponentInteraction($"{InteractionConstants.ToggleGuildCommandClear}")]
+    [ComponentInteraction($"{InteractionConstants.ToggleCommand.ToggleGuildCommandClear}")]
     [ServerStaffOnly]
     public async Task ClearDisabledChannelCommand()
     {

@@ -14,6 +14,7 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Domain;
 using FMBot.Domain.Attributes;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Models;
 using Microsoft.Extensions.Options;
@@ -44,7 +45,8 @@ public class GuildSettingBuilder
         var guildUsers = await this._guildService.GetGuildUsers(context.DiscordGuild.Id);
 
         response.Embed.WithTitle($".fmbot server configuration - {guild.Name}");
-        response.Embed.WithFooter($"{guild.DiscordGuildId}");
+        response.Embed.WithFooter($"{guild.DiscordGuildId}\n" +
+                                  $"Use '{context.Prefix}settings' for personal .fmbot settings");
 
         var settings = new StringBuilder();
 
@@ -188,7 +190,6 @@ public class GuildSettingBuilder
         response.Embed.WithColor(DiscordConstants.InformationColorBlue);
 
         return response;
-
     }
 
     public async Task<ResponseModel> SetPrefix(ContextModel context, IUser lastModifier = null)
@@ -640,15 +641,19 @@ public class GuildSettingBuilder
         var guild = await this._guildService.GetGuildAsync(context.DiscordGuild.Id);
 
         var fmType = new SelectMenuBuilder()
-            .WithPlaceholder("Select default server embed type")
+            .WithPlaceholder("Forced server 'fm' mode")
             .WithCustomId(InteractionConstants.FmGuildSettingType)
             .WithMinValues(0)
             .WithMaxValues(1);
 
-        foreach (var name in Enum.GetNames(typeof(FmEmbedType)).OrderBy(o => o))
+        foreach (var option in ((FmEmbedType[])Enum.GetValues(typeof(FmEmbedType))).OrderBy(o => o.GetAttribute<OptionOrderAttribute>().Order))
         {
+            var name = option.GetAttribute<OptionAttribute>().Name;
+            var optionDescription = option.GetAttribute<OptionAttribute>().Description;
+            var value = Enum.GetName(option);
+
             var selected = name == guild.FmEmbedType.ToString();
-            fmType.AddOption(new SelectMenuOptionBuilder(name, name, isDefault: selected));
+            fmType.AddOption(new SelectMenuOptionBuilder(name, value, optionDescription, isDefault: selected));
         }
 
         response.Embed.WithTitle("Set server 'fm' mode");
@@ -658,6 +663,8 @@ public class GuildSettingBuilder
         description.AppendLine("This will override whatever mode a user has set themselves.");
         description.AppendLine();
         description.AppendLine("To disable, simply de-select the mode you have selected.");
+        description.AppendLine();
+        description.AppendLine("Use `channelmode` to configure this per-channel.");
         description.AppendLine();
 
         if (guild.FmEmbedType.HasValue)
@@ -681,7 +688,6 @@ public class GuildSettingBuilder
 
         return response;
     }
-
 
     public static ResponseModel GuildReactionsAsync(ContextModel context, string prfx)
     {
@@ -740,9 +746,9 @@ public class GuildSettingBuilder
         response.Embed.AddField("Disabled commands", currentlyDisabled.Length > 0 ? currentlyDisabled.ToString() : "✅ All commands enabled.");
 
         var components = new ComponentBuilder()
-            .WithButton("Add", $"{InteractionConstants.ToggleGuildCommandAdd}", style: ButtonStyle.Secondary)
-            .WithButton("Remove", $"{InteractionConstants.ToggleGuildCommandRemove}", style: ButtonStyle.Secondary, disabled: currentlyDisabled.Length == 0)
-            .WithButton("Clear", $"{InteractionConstants.ToggleGuildCommandClear}", style: ButtonStyle.Secondary, disabled: currentlyDisabled.Length == 0);
+            .WithButton("Add", $"{InteractionConstants.ToggleCommand.ToggleGuildCommandAdd}", style: ButtonStyle.Secondary)
+            .WithButton("Remove", $"{InteractionConstants.ToggleCommand.ToggleGuildCommandRemove}", style: ButtonStyle.Secondary, disabled: currentlyDisabled.Length == 0)
+            .WithButton("Clear", $"{InteractionConstants.ToggleCommand.ToggleGuildCommandClear}", style: ButtonStyle.Secondary, disabled: currentlyDisabled.Length == 0);
 
         if (lastModifier != null)
         {
@@ -886,9 +892,33 @@ public class GuildSettingBuilder
             }
         }
 
+        var fmType = new SelectMenuBuilder()
+            .WithPlaceholder("Forced channel 'fm' mode")
+            .WithCustomId($"{InteractionConstants.ToggleCommand.ToggleCommandChannelFmType}-{selectedChannel.Id}-{selectedCategoryId}")
+            .WithMinValues(0)
+            .WithMaxValues(1);
+
+        foreach (var option in ((FmEmbedType[])Enum.GetValues(typeof(FmEmbedType))).OrderBy(o => o.GetAttribute<OptionOrderAttribute>().Order))
+        {
+            var name = option.GetAttribute<OptionAttribute>().Name;
+            var description = option.GetAttribute<OptionAttribute>().Description;
+            var value = Enum.GetName(option);
+
+            var active = option == channel?.FmEmbedType;
+
+            fmType.AddOption(new SelectMenuOptionBuilder(name, value, description, isDefault: active));
+        }
+
         if (!botDisabled)
         {
             response.Embed.AddField("Disabled commands", currentlyDisabled.Length > 0 ? currentlyDisabled.ToString() : "✅ All commands enabled.");
+
+            if (channel != null && channel.FmEmbedType.HasValue)
+            {
+                var name = channel.FmEmbedType.GetAttribute<OptionAttribute>().Name;
+
+                response.Embed.AddField("Forced 'fm' mode", $"`{name}`");
+            }
         }
         else
         {
@@ -899,21 +929,23 @@ public class GuildSettingBuilder
         var downDisabled = nextCategoryId == 0 || nextChannelId == 0;
 
         var components = new ComponentBuilder()
-            .WithButton(null, $"{InteractionConstants.ToggleCommandMove}-{previousChannelId}-{previousCategoryId}", style: ButtonStyle.Secondary, Emote.Parse(DiscordConstants.OneToFiveUp), disabled: upDisabled)
-            .WithButton(null, $"{InteractionConstants.ToggleCommandMove}-{nextChannelId}-{nextCategoryId}", style: ButtonStyle.Secondary, Emote.Parse(DiscordConstants.OneToFiveDown), disabled: downDisabled, row: 1)
-            .WithButton("Add", $"{InteractionConstants.ToggleCommandAdd}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, disabled: botDisabled)
-            .WithButton("Remove", $"{InteractionConstants.ToggleCommandRemove}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, disabled: botDisabled || currentlyDisabled.Length == 0)
-            .WithButton("Clear", $"{InteractionConstants.ToggleCommandClear}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, disabled: botDisabled || currentlyDisabled.Length == 0);
+            .WithButton(null, $"{InteractionConstants.ToggleCommand.ToggleCommandMove}-{previousChannelId}-{previousCategoryId}", style: ButtonStyle.Secondary, Emote.Parse(DiscordConstants.OneToFiveUp), disabled: upDisabled)
+            .WithButton(null, $"{InteractionConstants.ToggleCommand.ToggleCommandMove}-{nextChannelId}-{nextCategoryId}", style: ButtonStyle.Secondary, Emote.Parse(DiscordConstants.OneToFiveDown), disabled: downDisabled, row: 1)
+            .WithButton("Add", $"{InteractionConstants.ToggleCommand.ToggleCommandAdd}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, disabled: botDisabled)
+            .WithButton("Remove", $"{InteractionConstants.ToggleCommand.ToggleCommandRemove}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, disabled: botDisabled || currentlyDisabled.Length == 0)
+            .WithButton("Clear", $"{InteractionConstants.ToggleCommand.ToggleCommandClear}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, disabled: botDisabled || currentlyDisabled.Length == 0);
 
         if (!botDisabled)
         {
+            components.WithSelectMenu(fmType);
+
             components
-                .WithButton("Disable bot in channel", $"{InteractionConstants.ToggleCommandDisableAll}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, row: 1);
+                .WithButton("Disable bot in channel", $"{InteractionConstants.ToggleCommand.ToggleCommandDisableAll}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Secondary, row: 1);
         }
         else
         {
             components
-                .WithButton("Enable bot in channel", $"{InteractionConstants.ToggleCommandEnableAll}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Primary, row: 1);
+                .WithButton("Enable bot in channel", $"{InteractionConstants.ToggleCommand.ToggleCommandEnableAll}-{selectedChannel.Id}-{selectedCategoryId}", style: ButtonStyle.Primary, row: 1);
         }
 
         response.Components = components;

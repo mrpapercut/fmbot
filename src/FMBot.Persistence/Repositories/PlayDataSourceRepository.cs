@@ -23,49 +23,17 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         this._botSettings = botSettings.Value;
     }
 
-    public static ICollection<UserPlay> GetFinalUserPlays(ImportUser user, ICollection<UserPlay> userPlays)
-    {
-        switch (user?.DataSource)
-        {
-            case DataSource.FullSpotifyThenLastFm:
-                {
-                    var firstImportPlay = userPlays.Where(w => w.PlaySource != PlaySource.LastFm).MinBy(o => o.TimePlayed)?.TimePlayed;
-
-                    return userPlays
-                        .Where(w => w.PlaySource != PlaySource.LastFm || w.TimePlayed > user.LastImportPlay || w.TimePlayed < firstImportPlay)
-                        .ToList();
-                }
-            case DataSource.SpotifyThenFullLastFm:
-                {
-                    var firstLastFmPlay = userPlays
-                        .Where(w => w.PlaySource == PlaySource.LastFm)
-                        .MinBy(o => o.TimePlayed);
-
-                    return userPlays
-                        .Where(w => w.PlaySource != PlaySource.SpotifyImport || w.TimePlayed < (firstLastFmPlay?.TimePlayed ?? DateTime.UtcNow))
-                        .ToList();
-                }
-            case DataSource.LastFm:
-            default:
-                {
-                    return userPlays
-                        .Where(w => w.PlaySource is null or PlaySource.LastFm)
-                        .ToList();
-                }
-        }
-    }
-
     public async Task<Response<RecentTrackList>> GetRecentTracksAsync(ImportUser user, int count = 2, bool useCache = false, long? fromUnixTimestamp = null)
     {
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, count);
-        plays = GetFinalUserPlays(user, plays);
+        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource, count);
 
         return new Response<RecentTrackList>
         {
             Success = true,
+            PlaySource = DeterminePlaySource(plays),
             Content = new RecentTrackList
             {
                 RecentTracks = plays.Select(s => new RecentTrack
@@ -86,10 +54,15 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
 
         var fromTimeStamp = from.HasValue ? DateTimeOffset.FromUnixTimeSeconds(from.Value).UtcDateTime : new DateTime(2000, 1, 1);
 
-        var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, fromTimeStamp);
-        plays = GetFinalUserPlays(user, plays);
+        return await PlayRepository.GetUserPlayCount(user.UserId, connection, user.DataSource, start: fromTimeStamp);
+    }
 
-        return plays.Count;
+    public async Task<long?> GetStoredPlayCountBeforeDateAsync(User user, DateTime until)
+    {
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        return await PlayRepository.GetUserPlayCount(user.UserId, connection, user.DataSource, until);
     }
 
     public async Task<Response<RecentTrack>> GetMilestoneScrobbleAsync(ImportUser user, int milestoneScrobble)
@@ -97,9 +70,7 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, 99999999);
-
-        plays = GetFinalUserPlays(user, plays);
+        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource);
 
         var milestone = plays
             .OrderBy(o => o.TimePlayed)
@@ -119,7 +90,8 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
                     TimePlayed = milestone.TimePlayed
                 }
                 : null,
-            Success = milestone != null
+            Success = milestone != null,
+            PlaySource = DeterminePlaySource(plays)
         };
     }
 
@@ -128,9 +100,7 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, 99999999);
-
-        plays = GetFinalUserPlays(user, plays);
+        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource);
 
         dataSourceUser.Playcount = plays.Count;
 
@@ -150,6 +120,8 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
             ArtistName = g.ArtistName.ToLower(),
             TrackName = g.TrackName.ToLower()
         }).Count();
+
+        dataSourceUser.Registered = plays.MinBy(o => o.TimePlayed).TimePlayed;
 
         return dataSourceUser;
     }
@@ -200,14 +172,12 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         ICollection<UserPlay> plays = new List<UserPlay>();
         if (timePeriod == TimePeriod.AllTime)
         {
-            plays = await PlayRepository.GetUserPlays(user.UserId, connection, 99999999);
+            plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource);
         }
         else
         {
-            plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, DateTime.UtcNow.AddDays(-playDays));
+            plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource, start: DateTime.UtcNow.AddDays(-playDays));
         }
-
-        plays = GetFinalUserPlays(user, plays);
 
         return PlaysToTopAlbums(plays, count);
     }
@@ -218,26 +188,29 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, startDateTime, endDateTime);
-        plays = GetFinalUserPlays(user, plays);
+        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource, start: startDateTime, end: endDateTime);
 
         return PlaysToTopAlbums(plays, count);
     }
 
-    private static Response<TopAlbumList> PlaysToTopAlbums(IEnumerable<UserPlay> plays, int count)
+    private static Response<TopAlbumList> PlaysToTopAlbums(ICollection<UserPlay> plays, int count)
     {
+        var topAlbums = plays
+            .Where(w => w.AlbumName != null)
+            .GroupBy(g => new
+            {
+                ArtistName = g.ArtistName.ToLower(),
+                AlbumName = g.AlbumName.ToLower()
+            }).ToList();
+
         return new Response<TopAlbumList>
         {
             Success = true,
+            PlaySource = DeterminePlaySource(plays),
             Content = new TopAlbumList
             {
-                TopAlbums = plays
-                    .Where(w => w.AlbumName != null)
-                    .GroupBy(g => new
-                    {
-                        ArtistName = g.ArtistName.ToLower(),
-                        AlbumName = g.AlbumName.ToLower()
-                    })
+                TotalAmount = topAlbums.Count,
+                TopAlbums = topAlbums
                     .Select(s => new TopAlbum
                     {
                         ArtistName = s.First().ArtistName,
@@ -285,14 +258,12 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         ICollection<UserPlay> plays = new List<UserPlay>();
         if (timePeriod == TimePeriod.AllTime)
         {
-            plays = await PlayRepository.GetUserPlays(user.UserId, connection, 99999999);
+            plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource);
         }
         else
         {
-            plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, DateTime.UtcNow.AddDays(-playDays));
+            plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource, start: DateTime.UtcNow.AddDays(-playDays));
         }
-
-        plays = GetFinalUserPlays(user, plays);
 
         return PlaysToTopArtists(plays, count);
     }
@@ -303,21 +274,25 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, startDateTime, endDateTime);
-        plays = GetFinalUserPlays(user, plays);
+        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource, start: startDateTime, end: endDateTime);
 
         return PlaysToTopArtists(plays, count);
     }
 
-    private static Response<TopArtistList> PlaysToTopArtists(IEnumerable<UserPlay> plays, int count)
+    private static Response<TopArtistList> PlaysToTopArtists(ICollection<UserPlay> plays, int count)
     {
+        var topArtists = plays
+            .GroupBy(g => g.ArtistName, StringComparer.InvariantCultureIgnoreCase)
+            .ToList();
+
         return new Response<TopArtistList>
         {
             Success = true,
+            PlaySource = DeterminePlaySource(plays),
             Content = new TopArtistList
             {
-                TopArtists = plays
-                    .GroupBy(g => g.ArtistName.ToLower())
+                TotalAmount = topArtists.Count,
+                TopArtists = topArtists
                     .Select(s => new TopArtist
                     {
                         ArtistName = s.First().ArtistName,
@@ -363,14 +338,12 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         ICollection<UserPlay> plays = new List<UserPlay>();
         if (timePeriod == TimePeriod.AllTime)
         {
-            plays = await PlayRepository.GetUserPlays(user.UserId, connection, 99999999);
+            plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource);
         }
         else
         {
-            plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, DateTime.UtcNow.AddDays(-playDays));
+            plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource, start: DateTime.UtcNow.AddDays(-playDays));
         }
-
-        plays = GetFinalUserPlays(user, plays);
 
         return PlaysToTopTracks(plays, count);
     }
@@ -381,25 +354,28 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, startDateTime, endDateTime);
-        plays = GetFinalUserPlays(user, plays);
+        var plays = await PlayRepository.GetUserPlays(user.UserId, connection, user.DataSource, start: startDateTime, end: endDateTime);
 
         return PlaysToTopTracks(plays, count);
     }
 
-    private static Response<TopTrackList> PlaysToTopTracks(IEnumerable<UserPlay> plays, int count)
+    private static Response<TopTrackList> PlaysToTopTracks(ICollection<UserPlay> plays, int count)
     {
+        var topTracks = plays
+            .GroupBy(g => new
+            {
+                ArtistName = g.ArtistName.ToLower(),
+                TrackName = g.TrackName.ToLower()
+            }).ToList();
+
         return new Response<TopTrackList>
         {
             Success = true,
+            PlaySource = DeterminePlaySource(plays),
             Content = new TopTrackList
             {
-                TopTracks = plays
-                    .GroupBy(g => new
-                    {
-                        ArtistName = g.ArtistName.ToLower(),
-                        TrackName = g.TrackName.ToLower()
-                    })
+                TotalAmount = topTracks.Count,
+                TopTracks = topTracks
                     .Select(s => new TopTrack
                     {
                         ArtistName = s.First().ArtistName,
@@ -420,5 +396,20 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
                     .ToList()
             }
         };
+    }
+
+    private static PlaySource DeterminePlaySource(ICollection<UserPlay> plays)
+    {
+        if (plays == null)
+        {
+            return PlaySource.LastFm;
+        }
+
+        if (plays.Any(a => a.PlaySource == PlaySource.SpotifyImport))
+        {
+            return PlaySource.SpotifyImport;
+        }
+
+        return PlaySource.LastFm;
     }
 }

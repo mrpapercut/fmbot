@@ -1,10 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Configuration;
 
 namespace FMBot.Persistence.EntityFrameWork
@@ -26,6 +22,7 @@ namespace FMBot.Persistence.EntityFrameWork
         public virtual DbSet<UserDiscogs> UserDiscogs { get; set; }
 
         public virtual DbSet<BottedUser> BottedUsers { get; set; }
+        public virtual DbSet<GlobalFilteredUser> GlobalFilteredUsers { get; set; }
         public virtual DbSet<InactiveUsers> InactiveUsers { get; set; }
         public virtual DbSet<BottedUserReport> BottedUserReport { get; set; }
         public virtual DbSet<CensoredMusicReport> CensoredMusicReport { get; set; }
@@ -36,6 +33,7 @@ namespace FMBot.Persistence.EntityFrameWork
         public virtual DbSet<UserPlay> UserPlays { get; set; }
         public virtual DbSet<UserCrown> UserCrowns { get; set; }
         public virtual DbSet<UserStreak> UserStreaks { get; set; }
+        public virtual DbSet<UserInteraction> UserInteractions { get; set; }
         public virtual DbSet<AiGeneration> AiGenerations { get; set; }
 
         public virtual DbSet<Artist> Artists { get; set; }
@@ -44,9 +42,11 @@ namespace FMBot.Persistence.EntityFrameWork
 
         public virtual DbSet<CensoredMusic> CensoredMusic { get; set; }
         public virtual DbSet<FeaturedLog> FeaturedLogs { get; set; }
+        public virtual DbSet<AiPrompt> AiPrompts { get; set; }
 
         public virtual DbSet<ArtistGenre> ArtistGenres { get; set; }
         public virtual DbSet<ArtistAlias> ArtistAliases { get; set; }
+        public virtual DbSet<ArtistLink> ArtistLinks { get; set; }
 
         private readonly IConfiguration _configuration;
 
@@ -62,7 +62,7 @@ namespace FMBot.Persistence.EntityFrameWork
                 optionsBuilder.UseNpgsql(this._configuration["Database:ConnectionString"]);
 
                 // Uncomment below connection string when creating migrations, and also comment out the above iconfiguration stuff
-                //optionsBuilder.UseNpgsql("Host=localhost;Port=5433;Username=postgres;Password=password;Database=fmbot;Command Timeout=60;Timeout=60;Persist Security Info=True");
+                //optionsBuilder.UseNpgsql("Host=localhost;Port=5435;Username=postgres;Password=password;Database=fmbot;Command Timeout=60;Timeout=60;Persist Security Info=True");
 
                 optionsBuilder.UseSnakeCaseNamingConvention();
             }
@@ -173,6 +173,11 @@ namespace FMBot.Persistence.EntityFrameWork
             modelBuilder.Entity<BottedUser>(entity =>
             {
                 entity.HasKey(e => e.BottedUserId);
+            });
+
+            modelBuilder.Entity<GlobalFilteredUser>(entity =>
+            {
+                entity.HasKey(e => e.GlobalFilteredUserId);
             });
 
             modelBuilder.Entity<BottedUserReport>(entity =>
@@ -306,6 +311,16 @@ namespace FMBot.Persistence.EntityFrameWork
                     .OnDelete(DeleteBehavior.Cascade);
             });
 
+            modelBuilder.Entity<UserInteraction>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+
+                entity.HasOne(u => u.User)
+                    .WithMany(a => a.Interactions)
+                    .HasForeignKey(f => f.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
             modelBuilder.Entity<AiGeneration>(entity =>
             {
                 entity.HasKey(e => e.Id);
@@ -399,6 +414,16 @@ namespace FMBot.Persistence.EntityFrameWork
 
                 entity.HasOne(d => d.Artist)
                     .WithMany(p => p.ArtistAliases)
+                    .HasForeignKey(d => d.ArtistId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<ArtistLink>(entity =>
+            {
+                entity.HasKey(a => a.Id);
+
+                entity.HasOne(d => d.Artist)
+                    .WithMany(p => p.ArtistLinks)
                     .HasForeignKey(d => d.ArtistId)
                     .OnDelete(DeleteBehavior.Cascade);
             });

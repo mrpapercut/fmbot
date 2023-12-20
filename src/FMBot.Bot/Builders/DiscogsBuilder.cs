@@ -13,7 +13,6 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.ThirdParty;
 using FMBot.Domain;
 using FMBot.Domain.Models;
-using static SpotifyAPI.Web.PlaylistRemoveItemsRequest;
 
 namespace FMBot.Bot.Builders;
 
@@ -22,12 +21,69 @@ public class DiscogsBuilder
     private readonly UserService _userService;
     private readonly DiscogsService _discogsService;
     private readonly InteractiveService _interactivity;
+    private readonly ArtistsService _artistsService;
 
-    public DiscogsBuilder(UserService userService, DiscogsService discogsService, InteractiveService interactiveService)
+    public DiscogsBuilder(UserService userService, DiscogsService discogsService, InteractiveService interactiveService, ArtistsService artistsService)
     {
         this._userService = userService;
         this._discogsService = discogsService;
         this._interactivity = interactiveService;
+        this._artistsService = artistsService;
+    }
+
+    public ResponseModel DiscogsLoginGetLinkAsync(ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed,
+        };
+
+        response.Embed.WithDescription($"Click the button below to get your Discogs login link.");
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+
+        response.Components = new ComponentBuilder()
+            .WithButton("Get login link", style: ButtonStyle.Primary, customId: InteractionConstants.Discogs.StartAuth);
+
+        return response;
+    }
+
+    public async Task<ResponseModel> DiscogsToggleCollectionValue(ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed,
+        };
+
+        var result = await this._discogsService.ToggleCollectionValueHidden(context.ContextUser.UserId);
+
+        if (result == true)
+        {
+            response.Embed.WithDescription($"Your Discogs collection value is now hidden from all .fmbot commands.");
+        }
+        else
+        {
+            response.Embed.WithDescription($"Your Discogs collection value is now visible in all .fmbot commands.");
+        }
+
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+
+        return response;
+    }
+
+    public async Task<ResponseModel> DiscogsRemove(ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed,
+        };
+
+        await this._discogsService.RemoveDiscogs(context.ContextUser.UserId);
+
+        response.Embed.WithDescription($"Your Discogs account has been removed from your Discogs account.");
+
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+
+        return response;
     }
 
     public async Task<ResponseModel> DiscogsLoginAsync(ContextModel context)
@@ -39,13 +95,16 @@ public class DiscogsBuilder
 
         var discogsAuth = await this._discogsService.GetDiscogsAuthLink();
 
-        response.Embed.WithDescription($"**[Click here to login to Discogs.]({discogsAuth.LoginUrl})**\n\n" +
-                                    $"After authorizing .fmbot a code will be shown.\n" +
-                                    $"**Copy the code and send it in this chat.**");
+        response.Embed.WithDescription($"Login to Discogs with the button below and authorize .fmbot. \n" +
+                                       $"After authorizing a code will be shown.\n\n" +
+                                       $"**Copy the code and send it in this chat.**");
         response.Embed.WithFooter($"Do not share the code outside of this DM conversation");
         response.Embed.WithColor(DiscordConstants.InformationColorBlue);
 
-        var dm = await context.DiscordUser.SendMessageAsync("", false, response.Embed.Build());
+        response.Components = new ComponentBuilder()
+            .WithButton("Login to Discogs", style: ButtonStyle.Link, url: discogsAuth.LoginUrl);
+
+        var dm = await context.DiscordUser.SendMessageAsync("", false, response.Embed.Build(), components: response.Components.Build());
         response.Embed.Footer = null;
 
         var result = await this._interactivity.NextMessageAsync(x => x.Channel.Id == dm.Channel.Id, timeout: TimeSpan.FromMinutes(15));
@@ -129,6 +188,7 @@ public class DiscogsBuilder
             }
 
             response.CommandResponse = CommandResponse.UsernameNotSet;
+            response.Embed.Color = DiscordConstants.WarningColorOrange;
             return response;
         }
 
@@ -201,7 +261,7 @@ public class DiscogsBuilder
                 footer.AppendLine($"Searching for '{StringExtensions.Sanitize(searchValues)}'");
             }
 
-            if (searchValues == null)
+            if (searchValues == null && user.UserDiscogs.HideValue != true)
             {
                 footer.AppendLine($"{user.UserDiscogs.MinimumValue} min " +
                                   $"- {user.UserDiscogs.MedianValue} med" +
@@ -320,7 +380,7 @@ public class DiscogsBuilder
         }
 
         var artistPages = topArtists.OrderByDescending(s => s.UserReleasesInCollection).ToList()
-            .ChunkBy(topListSettings.ExtraLarge ? Constants.DefaultExtraLargePageSize : Constants.DefaultPageSize);
+            .ChunkBy((int)topListSettings.EmbedSize);
 
         var counter = 1;
         var pageCounter = 1;
@@ -334,7 +394,7 @@ public class DiscogsBuilder
                     $"**[{artist.ArtistName}]({artist.ArtistUrl})** ({artist.UserReleasesInCollection} {StringExtensions.GetReleasesString(artist.UserReleasesInCollection)})";
 
                 // TODO for those who know how to deal with this: honor Billboard :)
-                artistPageString.Append($"{counter}\\. ");
+                artistPageString.Append($"{counter}. ");
                 artistPageString.AppendLine(name);
 
                 counter++;
@@ -357,6 +417,65 @@ public class DiscogsBuilder
 
         response.StaticPaginator = StringService.BuildStaticPaginator(pages);
         response.ResponseType = ResponseType.Paginator;
+        return response;
+    }
+
+    public static ResponseModel DiscogsManage(ContextModel context)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Embed,
+            Components = new ComponentBuilder()
+                .WithButton(context.ContextUser.UserDiscogs.HideValue == true ? "Show value" : "Hide value", InteractionConstants.Discogs.ToggleCollectionValue, ButtonStyle.Secondary)
+                .WithButton("Re-login", InteractionConstants.Discogs.StartAuth, ButtonStyle.Secondary)
+                .WithButton("Remove connection", InteractionConstants.Discogs.RemoveAccount, ButtonStyle.Danger)
+        };
+
+        var description = new StringBuilder();
+
+        description.AppendLine("Use the buttons below to manage the Discogs integration for your account.");
+        description.AppendLine();
+
+        if (context.ContextUser.UserDiscogs.HideValue == true)
+        {
+            description.AppendLine("- Show value - Shows the value of your collection in commands");
+        }
+        else
+        {
+            description.AppendLine("- Hide value - Hides the value of your collection in commands");
+        }
+
+        description.AppendLine("- Re-login - Re-authorize .fmbot");
+        description.AppendLine("- Remove connection - Remove Discogs from your .fmbot account");
+
+        response.Embed.WithDescription(description.ToString());
+        response.Embed.WithColor(DiscordConstants.InformationColorBlue);
+        response.Embed.WithTitle("Manage Discogs connection");
+
+        return response;
+    }
+
+    public async Task<ResponseModel> WhoHasDiscogsAsync(
+        ContextModel context,
+        ResponseMode mode,
+        string artistValues,
+        bool displayRoleSelector = false,
+        List<ulong> roles = null,
+        bool redirectsEnabled = true)
+    {
+        var response = new ResponseModel
+        {
+            ResponseType = ResponseType.Paginator,
+        };
+
+        var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistValues,
+            context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, useCachedArtists: true,
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+        if (artistSearch.Artist == null)
+        {
+            return artistSearch.Response;
+        }
+
         return response;
     }
 }

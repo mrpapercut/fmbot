@@ -86,7 +86,7 @@ public class LastFmRepository : ILastfmRepository
             else
             {
                 recentTracksCall = await this._lastFmApi.CallApiAsync<RecentTracksListLfmResponseModel>(queryParams, Call.RecentTracks, authorizedCall);
-                if (recentTracksCall.Success && recentTracksCall.Content.RecentTracks.Track.Count >= (count - 2) && count >= 200)
+                if (recentTracksCall.Success && recentTracksCall.Content.RecentTracks.Track.Count >= (count - 2) && count >= 400)
                 {
                     for (var i = 1; i < amountOfPages; i++)
                     {
@@ -371,12 +371,11 @@ public class LastFmRepository : ILastfmRepository
             AlbumCount = userCall.Content.User.AlbumCount,
             ArtistCount = userCall.Content.User.ArtistCount,
             TrackCount = userCall.Content.User.TrackCount,
-            Name = userCall.Content.User.Name,
+            Name = userCall.Content.User.Realname,
             Country = userCall.Content.User.Country,
             Url = userCall.Content.User.Url.ToString(),
             Registered = DateTime.UnixEpoch.AddSeconds(userCall.Content.User.Registered.Unixtime).ToUniversalTime(),
             RegisteredUnix = userCall.Content.User.Registered.Unixtime,
-
             Image = userCall.Content.User.Image.FirstOrDefault(a => a.Size == "extralarge") != null &&
                     !string.IsNullOrWhiteSpace(userCall.Content.User.Image.First(a => a.Size == "extralarge").Text)
                 ? userCall.Content.User.Image?.First(a => a.Size == "extralarge").Text.Replace("/u/300x300/", "/u/")
@@ -424,13 +423,13 @@ public class LastFmRepository : ILastfmRepository
     }
 
     // Track info
-    public async Task<Response<TrackInfo>> GetTrackInfoAsync(string trackName, string artistName, string username = null)
+    public async Task<Response<TrackInfo>> GetTrackInfoAsync(string trackName, string artistName, bool redirectsEnabled, string username = null)
     {
         var queryParams = new Dictionary<string, string>
         {
             {"artist", artistName },
             {"track", trackName },
-            {"autocorrect", "1"},
+            {"autocorrect", redirectsEnabled ? "1" : "0"},
             {"extended", "1" }
         };
 
@@ -472,7 +471,7 @@ public class LastFmRepository : ILastfmRepository
                         : null,
                     TotalPlaycount = trackCall.Content.Track.Playcount ?? 0,
                     TotalListeners = trackCall.Content.Track.Listeners ?? 0,
-                    Duration = trackCall.Content.Track.Duration,
+                    Duration = trackCall.Content.Track.Duration != 0 ? trackCall.Content.Track.Duration : (long?)null,
                     UserPlaycount = trackCall.Content.Track.Userplaycount,
                     Loved = trackCall.Content.Track.Userloved == "1",
                     Tags = trackCall.Content.Track.Toptags?.Tag?.Select(s => new Tag
@@ -544,12 +543,13 @@ public class LastFmRepository : ILastfmRepository
         };
     }
 
-    public async Task<Response<AlbumInfo>> GetAlbumInfoAsync(string artistName, string albumName, string username = null)
+    public async Task<Response<AlbumInfo>> GetAlbumInfoAsync(string artistName, string albumName, bool redirectsEnabled, string username = null)
     {
         var queryParams = new Dictionary<string, string>
         {
             {"artist", artistName },
-            {"album", albumName }
+            {"album", albumName },
+            {"autocorrect", redirectsEnabled ? "1" : "0"}
         };
 
         if (!string.IsNullOrEmpty(username))
@@ -1205,14 +1205,16 @@ public class LastFmRepository : ILastfmRepository
         };
     }
 
-    public async Task<Response<StoredPlayResponse>> ScrobbleAsync(string lastFmSessionKey, string artistName, string trackName, string albumName = null)
+    public async Task<Response<StoredPlayResponse>> ScrobbleAsync(string lastFmSessionKey, string artistName, string trackName, string albumName = null, DateTime? timeStamp = null)
     {
+        timeStamp ??= DateTime.UtcNow;
+
         var queryParams = new Dictionary<string, string>
         {
             {"artist", artistName},
             {"track", trackName},
             {"sk", lastFmSessionKey},
-            {"timestamp",  ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds().ToString() }
+            {"timestamp",  ((DateTimeOffset)timeStamp).ToUnixTimeSeconds().ToString() }
         };
 
         if (!string.IsNullOrWhiteSpace(albumName))

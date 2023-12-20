@@ -1,0 +1,33 @@
+version: '3.8'
+
+name: 'fmbot-local'
+services:
+  local-1:
+    image: ghcr.io/fmbot-discord/fmbot:dev
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - C:\projects\fmbot\fmbot\.configs\local:/app/configs/
+    command: "--memory=5g"
+    environment:
+      - INSTANCE_NAME=local-1
+      - SHARDS_MAIN_INSTANCE=true
+      - SHARDS_TOTAL_SHARDS=12
+      - SHARDS_FIRST_SHARD=0
+      - SHARDS_LAST_SHARD=5
+
+  local-2:
+    image: ghcr.io/fmbot-discord/fmbot:dev
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - C:\projects\fmbot\fmbot\.configs\local:/app/configs/
+    command: "--memory=5g"
+    depends_on:
+      local-1:
+        condition: service_healthy
+    environment:
+      - INSTANCE_NAME=local-2
+      - SHARDS_TOTAL_SHARDS=12
+      - SHARDS_FIRST_SHARD=6
+      - SHARDS_LAST_SHARD=11

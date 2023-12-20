@@ -6,10 +6,12 @@ using Discord;
 using Fergun.Interactive;
 using Fergun.Interactive.Pagination;
 using FMBot.Bot.Extensions;
+using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Domain;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
+using Microsoft.AspNetCore.WebUtilities;
 
 namespace FMBot.Bot.Services;
 
@@ -57,7 +59,7 @@ public static class StringService
     {
         var description = new StringBuilder();
 
-        description.AppendLine($"**[{StringExtensions.Sanitize(track.TrackName)}]({track.TrackUrl})** by **{StringExtensions.Sanitize(track.ArtistName)}**");
+        description.AppendLine($"**[{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.TrackName, 200))}]({track.TrackUrl})** by **{StringExtensions.Sanitize(track.ArtistName)}**");
 
         if (!track.TimePlayed.HasValue || track.NowPlaying)
         {
@@ -87,18 +89,29 @@ public static class StringService
         {
             if (rymEnabled == true)
             {
-                var albumQueryName = track.AlbumName.Replace(" - Single", "");
-                albumQueryName = albumQueryName.Replace(" - EP", "");
+                var searchTerm = track.AlbumName.Replace(" - Single", "");
+                searchTerm = searchTerm.Replace(" - EP", "");
+                searchTerm = $"{StringExtensions.TruncateLongString(track.ArtistName, 25)} {StringExtensions.TruncateLongString(searchTerm, 25)}";
 
-                var albumRymUrl = @"https://rateyourmusic.com/search?searchterm=";
-                albumRymUrl += HttpUtility.UrlEncode($"{track.ArtistName} {albumQueryName}");
-                albumRymUrl += "&searchtype=l";
+                var url = QueryHelpers.AddQueryString("https://rateyourmusic.com/search",
+                    new Dictionary<string, string>
+                {
+                    {"searchterm", $"{searchTerm}"},
+                    {"searchtype", $"l"}
+                });
 
-                description.Append($"*[{StringExtensions.Sanitize(track.AlbumName)}]({albumRymUrl})*");
+                if (url.Length < 180)
+                {
+                    description.Append($"*[{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 160))}]({url})*");
+                }
+                else
+                {
+                    description.Append($"*{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 200))}*");
+                }
             }
             else
             {
-                description.Append($"*{StringExtensions.Sanitize(track.AlbumName)}*");
+                description.Append($"*{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 200))}*");
             }
         }
 
@@ -108,6 +121,15 @@ public static class StringService
     }
 
     public static string TrackToString(RecentTrack track)
+    {
+        return $"{StringExtensions.Sanitize(track.TrackName)}\n" +
+               $"By **{StringExtensions.Sanitize(track.ArtistName)}**" +
+               (string.IsNullOrWhiteSpace(track.AlbumName)
+                   ? "\n"
+                   : $" | *{StringExtensions.Sanitize(track.AlbumName)}*\n");
+    }
+
+    public static string TrackToOneLinedString(RecentTrack track)
     {
         return $"{StringExtensions.Sanitize(track.TrackName)}\n" +
                $"By **{StringExtensions.Sanitize(track.ArtistName)}**" +
@@ -201,7 +223,25 @@ public static class StringService
         return null;
     }
 
-    public static StaticPaginator BuildStaticPaginator(IList<PageBuilder> pages, string customOptionId = null, Emote optionEmote = null)
+    public static void SinglePageToEmbedResponseWithButton(this ResponseModel response, PageBuilder page,
+        string customOptionId = null,
+        IEmote optionEmote = null, string optionDescription = null)
+    {
+        response.Embed.WithTitle(page.Title);
+        response.Embed.WithAuthor(page.Author);
+        response.Embed.WithDescription(page.Description);
+        response.Embed.WithUrl(page.Url);
+        response.Embed.WithFooter(page.Footer);
+        response.Embed.Color = null;
+
+        if (customOptionId != null)
+        {
+            response.Components = new ComponentBuilder()
+                .WithButton(customId: customOptionId, emote: optionEmote, label: optionDescription, style:ButtonStyle.Secondary);
+        }
+    }
+
+    public static StaticPaginator BuildStaticPaginator(IList<PageBuilder> pages, string customOptionId = null, IEmote optionEmote = null)
     {
         var builder = new StaticPaginatorBuilder()
             .WithPages(pages)
@@ -216,6 +256,27 @@ public static class StringService
         if (customOptionId != null && optionEmote != null)
         {
             builder.AddOption(customOptionId, optionEmote, null, ButtonStyle.Primary);
+        }
+
+        if (customOptionId == null && pages.Count >= 25)
+        {
+            builder.AddOption(new KeyValuePair<IEmote, PaginatorAction>(Emote.Parse("<:pages_goto:1138849626234036264>"), PaginatorAction.Jump));
+        }
+
+        return builder.Build();
+    }
+
+    public static StaticPaginator BuildStaticPaginatorWithSelectMenu(IList<PageBuilder> pages,
+        SelectMenuBuilder selectMenuBuilder)
+    {
+        var builder = new StaticPaginatorBuilder()
+            .WithPages(pages)
+            .WithFooter(PaginatorFooter.None)
+            .WithActionOnTimeout(ActionOnStop.DeleteInput);
+
+        if (pages.Count != 1)
+        {
+            builder.WithOptions(DiscordConstants.PaginationEmotes);
         }
 
         return builder.Build();
@@ -368,7 +429,21 @@ public static class StringService
                 return "<:vinyl:1043644602969763861>";
             case "CD":
                 return "💿";
-            case "Casette":
+            case "Cassette":
+                return "<:casette:1043890774384853012>";
+            case "File":
+                return "📁";
+            case "CDr":
+                return "💿";
+            case "DVD":
+                return "📀";
+            case "Box Set":
+                return "📦";
+            case "Flexi-disc":
+                return "<:vinyl:1043644602969763861>";
+            case "Blu-ray":
+                return "📀";
+            case "8-Track Cartridge":
                 return "<:casette:1043890774384853012>";
         }
 

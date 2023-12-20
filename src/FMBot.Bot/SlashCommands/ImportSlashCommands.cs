@@ -16,6 +16,7 @@ using FMBot.Bot.Interfaces;
 using FMBot.Bot.Models;
 using FMBot.Bot.Builders;
 using Fergun.Interactive;
+using FMBot.Bot.Configurations;
 using FMBot.Domain;
 
 namespace FMBot.Bot.SlashCommands;
@@ -28,7 +29,8 @@ public class ImportSlashCommands : InteractionModuleBase
     private readonly ImportService _importService;
     private readonly PlayService _playService;
     private readonly IIndexService _indexService;
-    private readonly UserBuilder _userBuilder;
+    private readonly ImportBuilders _importBuilders;
+    private readonly SupporterService _supporterService;
     private InteractiveService Interactivity { get; }
 
     public ImportSlashCommands(UserService userService,
@@ -36,21 +38,23 @@ public class ImportSlashCommands : InteractionModuleBase
         ImportService importService,
         PlayService playService,
         IIndexService indexService,
-        UserBuilder userBuilder,
-        InteractiveService interactivity)
+        InteractiveService interactivity,
+        ImportBuilders importBuilders,
+        SupporterService supporterService)
     {
         this._userService = userService;
         this._dataSourceFactory = dataSourceFactory;
         this._importService = importService;
         this._playService = playService;
         this._indexService = indexService;
-        this._userBuilder = userBuilder;
         this.Interactivity = interactivity;
+        this._importBuilders = importBuilders;
+        this._supporterService = supporterService;
     }
 
     private const string SpotifyFileDescription = "Spotify history package (.zip) or history files (.json) ";
 
-    [SlashCommand("spotify", "Import your Spotify history (Beta)")]
+    [SlashCommand("spotify", "Import your Spotify history into .fmbot")]
     [UsernameSetRequired]
     public async Task SpotifyAsync(
         [Summary("file-1", SpotifyFileDescription)] IAttachment attachment1 = null,
@@ -71,18 +75,24 @@ public class ImportSlashCommands : InteractionModuleBase
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-        var embed = new EmbedBuilder();
-
-        if (contextUser.UserType == UserType.User)
+        if (this.Context.Interaction.Entitlements.Any() && !SupporterService.IsSupporter(contextUser.UserType))
         {
-            embed.WithDescription($"Only supporters can import their Spotify history into .fmbot.");
+            await this._supporterService.UpdateSingleDiscordSupporter(this.Context.User.Id);
+            this._userService.RemoveUserFromCache(contextUser);
+            contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        }
 
-            var components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: Constants.GetSupporterDiscordLink);
+        var supporterRequired = ImportBuilders.ImportSupporterRequired(new ContextModel(this.Context, contextUser));
 
-            embed.WithColor(DiscordConstants.InformationColorBlue);
-            await RespondAsync(embed: embed.Build(), components: components.Build());
+        if (supporterRequired != null)
+        {
+            //if (ConfigData.Data.Discord.BotUserId == Constants.BotProductionId)
+            //{
+            //    supporterRequired.ResponseType = ResponseType.SupporterRequired;
+            //}
 
-            this.Context.LogCommandUsed(CommandResponse.SupporterRequired);
+            await this.Context.SendResponse(this.Interactivity, supporterRequired);
+            this.Context.LogCommandUsed(supporterRequired.CommandResponse);
             return;
         }
 
@@ -94,71 +104,55 @@ public class ImportSlashCommands : InteractionModuleBase
         };
 
         var noAttachments = attachments.All(a => a == null);
-        await DeferAsync(ephemeral: noAttachments);
+        attachments = attachments.Where(w => w != null).ToList();
 
         var description = new StringBuilder();
-        embed.WithColor(DiscordConstants.SpotifyColorGreen);
+        var embed = new EmbedBuilder();
+        embed.WithColor(DiscordConstants.InformationColorBlue);
 
         if (noAttachments)
         {
-            embed.WithTitle("Spotify import instructions");
-
-            description.AppendLine("### Requesting your data from Spotify");
-            description.AppendLine("1. Go to your **[Spotify privacy settings](https://www.spotify.com/us/account/privacy/)**");
-            description.AppendLine("2. Scroll down to \"Download your data\"");
-            description.AppendLine("3. Select **Extended streaming history**");
-            description.AppendLine("4. De-select the other options");
-            description.AppendLine("5. Press request data");
-            description.AppendLine("6. Confirm your data request through your email");
-            description.AppendLine("7. Wait up to 30 days for Spotify to deliver your files");
-
-            description.AppendLine("### Importing your data into .fmbot");
-            description.AppendLine("1. Download the file Spotify provided");
-            description.AppendLine("2. Use this command and add the `.zip` file as an attachment through the options");
-            description.AppendLine("3. Having issues? You can also attach each `.json` file separately");
-
-            description.AppendLine("### Notes");
-            description.AppendLine("- We filter out duplicates, so don't worry about submitting the same file twice");
-            description.AppendLine("- Spotify files includes plays that you skipped quickly, we filter those out as well");
-            description.AppendLine("- You can select what from your import you want to use with `/import manage`");
-            description.AppendLine("- Discord mobile currently has an issue where it corrupts any `.json` file you send through it. Attach the `.zip` instead, or try using Discord desktop");
-
-            var years = await this.GetImportedYears(contextUser.UserId);
-            if (years.Length > 0)
-            {
-                embed.AddField("Total imported plays", years);
-            }
-
-            embed.WithDescription(description.ToString());
-            embed.WithFooter("Spotify importing is currently in beta. Please report any issues you encounter");
-
-            var components = new ComponentBuilder()
-                .WithButton("Spotify privacy settings", style: ButtonStyle.Link, url: "https://www.spotify.com/us/account/privacy/");
-
-            this.Context.LogCommandUsed(CommandResponse.Help);
-            await this.FollowupAsync(embed: embed.Build(), ephemeral: noAttachments, components: components.Build());
+            var instructionResponse =
+                await this._importBuilders.GetImportInstructions(new ContextModel(this.Context, contextUser));
+            await this.Context.SendResponse(this.Interactivity, instructionResponse);
+            this.Context.LogCommandUsed(instructionResponse.CommandResponse);
             return;
         }
 
+        await DeferAsync(ephemeral: noAttachments);
+
         try
         {
-            embed.WithTitle("Importing Spotify into .fmbot.. (Beta)");
+            embed.WithTitle("Importing Spotify into .fmbot..");
             embed.WithDescription("- <a:loading:821676038102056991> Loading import files...");
             var message = await FollowupAsync(embed: embed.Build());
 
-            var imports = await this._importService.HandleSpotifyFiles(attachments);
+            var imports = await this._importService.HandleSpotifyFiles(contextUser, attachments);
 
-            if (!imports.success)
+            if (imports.status == ImportStatus.UnknownFailure)
             {
                 embed.WithColor(DiscordConstants.WarningColorOrange);
-                await UpdateImportEmbed(message, embed, description, $"- ❌ Invalid Spotify import file. Make sure you select the right files, for example `my_spotify_data.zip` or `Streaming_History_Audio_x.json`." , true);
+                await UpdateImportEmbed(message, embed, description, $"❌ Invalid Spotify import file. Make sure you select the right files, for example `my_spotify_data.zip` or `Streaming_History_Audio_x.json`.", true);
+                this.Context.LogCommandUsed(CommandResponse.WrongInput);
+                return;
+            }
+
+            if (imports.status == ImportStatus.WrongPackageFailure)
+            {
+                embed.WithColor(DiscordConstants.WarningColorOrange);
+                await UpdateImportEmbed(message, embed, description, $"❌ Invalid Spotify import files. You have uploaded the wrong Spotify data package.\n\n" +
+                                                                     $"We can only process files that are from the ['Extended Streaming History'](https://www.spotify.com/us/account/privacy/) package. Instead you have uploaded the 'Account data' package.", true,
+                    image: "https://fmbot.xyz/img/bot/import-spotify-instructions.png",
+                    components: new ComponentBuilder().WithButton("Spotify privacy page", style: ButtonStyle.Link, url: "https://www.spotify.com/us/account/privacy/"));
                 this.Context.LogCommandUsed(CommandResponse.WrongInput);
                 return;
             }
 
             if (imports.result == null || imports.result.Count == 0 || imports.result.All(a => a.MsPlayed == 0))
             {
-                if (attachments != null && attachments.Any(a => a.Filename != null) && attachments.Any(a => a.Filename.ToLower().Contains("streaminghistory")))
+                if (attachments != null &&
+                    attachments.Any(a => a.Filename != null) &&
+                    attachments.Any(a => a.Filename.ToLower().Contains("streaminghistory")))
                 {
                     embed.WithColor(DiscordConstants.WarningColorOrange);
                     await UpdateImportEmbed(message, embed, description, $"❌ Invalid Spotify import file. We can only process files that are from the ['Extended Streaming History'](https://www.spotify.com/us/account/privacy/) package.\n\n" +
@@ -169,15 +163,15 @@ public class ImportSlashCommands : InteractionModuleBase
                 }
 
                 embed.WithColor(DiscordConstants.WarningColorOrange);
-                await UpdateImportEmbed(message, embed, description, $"- ❌ Invalid Spotify import file (contains no plays). Make sure you select the right files, for example `my_spotify_data.zip` or `Streaming_History_Audio_x.json`.\n\n" +
-                                                                     $"The Discord mobile app currently empties all `.json` files you send through it. We've reported this to them, try using Discord on desktop in the meantime.", true);
+                await UpdateImportEmbed(message, embed, description, $"❌ Invalid Spotify import file (contains no plays). Make sure you select the right files, for example `my_spotify_data.zip` or `Streaming_History_Audio_x.json`.\n\n" +
+                                                                     $"If your `.zip` contains files like `Userdata.json` or `Identity.json` its the wrong package. We can only process files that are from the ['Extended Streaming History'](https://www.spotify.com/us/account/privacy/) package. ", true);
                 this.Context.LogCommandUsed(CommandResponse.WrongInput);
                 return;
             }
 
             await UpdateImportEmbed(message, embed, description, $"- **{imports.result.Count}** Spotify imports found");
 
-            var plays = await this._importService.SpotifyImportToUserPlays(contextUser.UserId, imports.result);
+            var plays = await this._importService.SpotifyImportToUserPlays(contextUser, imports.result);
             await UpdateImportEmbed(message, embed, description, $"- **{plays.Count}** actual plays found");
 
             var playsWithoutDuplicates =
@@ -186,40 +180,69 @@ public class ImportSlashCommands : InteractionModuleBase
 
             if (playsWithoutDuplicates.Count > 0)
             {
-                await this._importService.InsertImportPlays(playsWithoutDuplicates);
+                await this._importService.InsertImportPlays(contextUser, playsWithoutDuplicates);
                 await UpdateImportEmbed(message, embed, description, $"- Added plays to database");
 
                 if (contextUser.DataSource == DataSource.LastFm)
                 {
-                    await this._userService.SetDataSource(contextUser, DataSource.FullSpotifyThenLastFm);
+                    var userHasImportedLastfm = await this._playService.UserHasImportedLastFm(contextUser.UserId);
+
+                    if (userHasImportedLastfm)
+                    {
+                        await this._userService.SetDataSource(contextUser, DataSource.FullSpotifyThenLastFm);
+                    }
+                    else
+                    {
+                        await this._userService.SetDataSource(contextUser, DataSource.SpotifyThenFullLastFm);
+                    }
                 }
             }
 
             await this._indexService.RecalculateTopLists(contextUser);
             await UpdateImportEmbed(message, embed, description, $"- Recalculated top lists");
 
-            await this._importService.UpdateExistingPlays(contextUser.UserId);
+            await this._importService.UpdateExistingPlays(contextUser);
 
-            var files = new StringBuilder();
-            foreach (var attachment in attachments
-                         .Where(w => w != null)
-                         .OrderBy(o => o.Filename)
-                         .GroupBy(g => g.Filename))
-            {
-                files.AppendLine($"`{attachment.First().Filename}`");
-            }
-
-            embed.AddField("Processed files", files.ToString());
-
-            var years = await this.GetImportedYears(contextUser.UserId);
+            var years = await this._importBuilders.GetImportedYears(contextUser.UserId);
             if (years.Length > 0)
             {
                 embed.AddField("Total imported plays", years);
             }
 
+            var examples = new StringBuilder();
+            examples.AppendLine($"- Get an overview for each year with the `year` command");
+            examples.AppendLine($"- View all your combined plays with `recent`");
+            examples.AppendLine($"- Or use the `top artists` command for top lists");
+
+            embed.AddField("Start exploring your full streaming history", examples);
+
+            contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+            var importSetting = new StringBuilder();
+            switch (contextUser.DataSource)
+            {
+                case DataSource.LastFm:
+                    importSetting.AppendLine(
+                        "Your play data source is currently still set to just Last.fm. You can change this manually with the button below.");
+                    break;
+                case DataSource.FullSpotifyThenLastFm:
+                    importSetting.AppendLine(
+                        "Your data source has been set to `Full Spotify, then Last.fm`. This uses your full Spotify history and adds your Last.fm scrobbles afterwards.");
+                    break;
+                case DataSource.SpotifyThenFullLastFm:
+                    importSetting.AppendLine(
+                        "Your data source has been set to `Spotify, then full Last.fm`. This uses your Spotify history up until you started using Last.fm.");
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+
+            embed.AddField("Current import setting", importSetting);
+            embed.WithFooter($"{imports.processedFiles.Count} processed import files");
+
             var components = new ComponentBuilder()
                 .WithButton("Manage import settings", InteractionConstants.ImportManage, style: ButtonStyle.Secondary);
 
+            embed.WithColor(DiscordConstants.SpotifyColorGreen);
             await UpdateImportEmbed(message, embed, description, $"- ✅ Import complete", true, components);
 
             this.Context.LogCommandUsed();
@@ -230,13 +253,18 @@ public class ImportSlashCommands : InteractionModuleBase
         }
     }
 
-    private static async Task UpdateImportEmbed(IUserMessage msg, EmbedBuilder embed, StringBuilder builder, string lineToAdd, bool lastLine = false, ComponentBuilder components = null)
+    private static async Task UpdateImportEmbed(IUserMessage msg, EmbedBuilder embed, StringBuilder builder, string lineToAdd, bool lastLine = false, ComponentBuilder components = null, string image = null)
     {
         builder.AppendLine(lineToAdd);
 
         const string loadingLine = "- <a:loading:821676038102056991> Processing...";
 
         embed.WithDescription(builder + (lastLine ? null : loadingLine));
+
+        if (image != null)
+        {
+            embed.WithImageUrl(image);
+        }
 
         await msg.ModifyAsync(m =>
         {
@@ -245,44 +273,18 @@ public class ImportSlashCommands : InteractionModuleBase
         });
     }
 
-    private async Task<string> GetImportedYears(int userId)
-    {
-        var years = new StringBuilder();
-        var allPlays = await this._playService
-            .GetAllUserPlays(userId, false);
-
-        var yearGroups = allPlays
-            .Where(w => w.PlaySource == PlaySource.SpotifyImport)
-            .OrderByDescending(o => o.TimePlayed)
-            .GroupBy(g => g.TimePlayed.Year);
-
-        foreach (var year in yearGroups)
-        {
-            years.AppendLine(
-                $"**`{year.Key}`** " +
-                $"- **{year.Count()}** plays");
-        }
-
-        return years.ToString();
-    }
-
-    [SlashCommand("manage", "Manage your import settings (Beta)")]
+    [SlashCommand("manage", "Manage your imports and configure how they are used")]
     [UsernameSetRequired]
     public async Task ManageImportAsync()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-        if (contextUser.UserType == UserType.User)
+        var supporterRequired = ImportBuilders.ImportSupporterRequired(new ContextModel(this.Context, contextUser));
+
+        if (supporterRequired != null)
         {
-            var embed = new EmbedBuilder();
-            embed.WithDescription($"Only supporters can import their Spotify history into .fmbot.");
-
-            var components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: Constants.GetSupporterDiscordLink);
-
-            embed.WithColor(DiscordConstants.InformationColorBlue);
-            await RespondAsync(embed: embed.Build(), components: components.Build());
-
-            this.Context.LogCommandUsed(CommandResponse.SupporterRequired);
+            await this.Context.SendResponse(this.Interactivity, supporterRequired);
+            this.Context.LogCommandUsed(supporterRequired.CommandResponse);
             return;
         }
 

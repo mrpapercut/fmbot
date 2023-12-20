@@ -11,6 +11,7 @@ using FMBot.Bot.Extensions;
 using FMBot.Bot.Interfaces;
 using FMBot.Domain;
 using FMBot.Domain.Enums;
+using FMBot.Domain.Flags;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Domain.Types;
@@ -34,13 +35,15 @@ public class UpdateService : IUpdateService
     private readonly BotSettings _botSettings;
     private readonly IDataSourceFactory _dataSourceFactory;
     private readonly SmallIndexRepository _smallIndexRepository;
+    private readonly AliasService _aliasService;
 
     public UpdateService(IUserUpdateQueue userUpdateQueue,
         IDbContextFactory<FMBotDbContext> contextFactory,
         IMemoryCache cache,
         IOptions<BotSettings> botSettings,
         IDataSourceFactory dataSourceFactory,
-        SmallIndexRepository smallIndexRepository)
+        SmallIndexRepository smallIndexRepository,
+        AliasService aliasService)
     {
         this._userUpdateQueue = userUpdateQueue;
         this._userUpdateQueue.UsersToUpdate.SubscribeAsync(OnNextAsync);
@@ -48,6 +51,7 @@ public class UpdateService : IUpdateService
         this._cache = cache;
         this._dataSourceFactory = dataSourceFactory;
         this._smallIndexRepository = smallIndexRepository;
+        this._aliasService = aliasService;
         this._botSettings = botSettings.Value;
     }
 
@@ -69,9 +73,9 @@ public class UpdateService : IUpdateService
         return (int)updatedUser.Content.NewRecentTracksAmount;
     }
 
-    public async Task<Response<RecentTrackList>> UpdateUserAndGetRecentTracks(User user)
+    public async Task<Response<RecentTrackList>> UpdateUserAndGetRecentTracks(User user, bool bypassIndexPending = false)
     {
-        if (this._cache.TryGetValue($"index-started-{user.UserId}", out bool _))
+        if (this._cache.TryGetValue(IndexService.IndexConcurrencyCacheKey(user.UserId), out bool _) && !bypassIndexPending)
         {
             return new Response<RecentTrackList>
             {
@@ -125,9 +129,6 @@ public class UpdateService : IUpdateService
 
         Log.Debug("Update: Started on {userId} | {userNameLastFm}", user.UserId, user.UserNameLastFM);
 
-        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
-        await connection.OpenAsync();
-
         string sessionKey = null;
         if (!string.IsNullOrEmpty(user.SessionKeyLastFm))
         {
@@ -137,13 +138,15 @@ public class UpdateService : IUpdateService
         var dateFromFilter = user.LastScrobbleUpdate?.AddHours(-3) ?? DateTime.UtcNow.AddDays(-14);
         var timeFrom = (long?)((DateTimeOffset)dateFromFilter).ToUnixTimeSeconds();
 
-        var count = 900;
+        var count = 1000;
+        var pages = 3;
         var totalPlaycountCorrect = false;
         var now = DateTime.UtcNow;
         if (dateFromFilter > now.AddHours(-22) && queueItem.GetAccurateTotalPlaycount)
         {
-            var playsToGet = (int)((DateTime.UtcNow - dateFromFilter).TotalMinutes / 4);
-            count = 75 + playsToGet;
+            var playsToGet = (int)((DateTime.UtcNow - dateFromFilter).TotalMinutes / 3);
+            count = 100 + playsToGet;
+            pages = 1;
             timeFrom = null;
             totalPlaycountCorrect = true;
         }
@@ -154,7 +157,10 @@ public class UpdateService : IUpdateService
             true,
             sessionKey,
             timeFrom,
-            3);
+            pages);
+
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
 
         if (!recentTracks.Success)
         {
@@ -181,8 +187,6 @@ public class UpdateService : IUpdateService
         }
 
         AddRecentPlayToMemoryCache(user.UserId, recentTracks.Content.RecentTracks);
-
-        _ = RemoveInactiveUserIfExists(user);
 
         if (!recentTracks.Content.RecentTracks.Any())
         {
@@ -224,8 +228,6 @@ public class UpdateService : IUpdateService
 
                 return recentTracks;
             }
-
-            await CacheArtistAliases();
 
             var cacheKey = $"{user.UserId}-update-in-progress";
             if (this._cache.TryGetValue(cacheKey, out bool _))
@@ -289,35 +291,6 @@ public class UpdateService : IUpdateService
         await this._smallIndexRepository.SmallIndexUser(user);
     }
 
-    private async Task CacheArtistAliases()
-    {
-        const string cacheKey = "artist-aliases";
-        var cacheTime = TimeSpan.FromMinutes(5);
-
-        if (this._cache.TryGetValue(cacheKey, out _))
-        {
-            return;
-        }
-
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-        var artistAliases = await db.ArtistAliases
-            .Include(i => i.Artist)
-            .ToListAsync();
-
-        foreach (var alias in artistAliases)
-        {
-            this._cache.Set(CacheKeyForAlias(alias.Alias.ToLower()), alias.Artist.Name.ToLower(), cacheTime);
-        }
-
-        this._cache.Set(cacheKey, true, cacheTime);
-        Log.Information($"Added {artistAliases.Count} artist aliases to memory cache");
-    }
-
-    private static string CacheKeyForAlias(string aliasName)
-    {
-        return $"artist-alias-{aliasName}";
-    }
-
     private static async Task<IReadOnlyDictionary<string, UserArtist>> GetUserArtists(int userId, IDbConnection connection)
     {
         const string sql = "SELECT DISTINCT ON (LOWER(name)) user_id, name, playcount, user_artist_id " +
@@ -342,9 +315,13 @@ public class UpdateService : IUpdateService
 
         foreach (var artist in newScrobbles.GroupBy(g => g.ArtistName.ToLower()))
         {
-            var alias = (string)this._cache.Get(CacheKeyForAlias(artist.Key.ToLower()));
+            var alias = await this._aliasService.GetAlias(artist.Key.ToLower());
 
-            var artistName = alias ?? artist.First().ArtistName;
+            var artistName = artist.First().ArtistName;
+            if (alias != null && !alias.Options.HasFlag(AliasOption.DisableInPlays))
+            {
+                artistName = alias.ArtistName;
+            }
 
             userArtists.TryGetValue(artistName.ToLower(), out var existingUserArtist);
 
@@ -414,9 +391,13 @@ public class UpdateService : IUpdateService
                          AlbumName = x.AlbumName.ToLower()
                      }))
         {
-            var alias = (string)this._cache.Get(CacheKeyForAlias(album.Key.ArtistName.ToLower()));
+            var alias = await this._aliasService.GetAlias(album.Key.ArtistName.ToLower());
 
-            var artistName = alias ?? album.First().ArtistName;
+            var artistName = album.First().ArtistName;
+            if (alias != null && !alias.Options.HasFlag(AliasOption.DisableInPlays))
+            {
+                artistName = alias.ArtistName;
+            }
 
             userAlbums.TryGetValue(artistName.ToLower(), out var userArtistAlbums);
 
@@ -489,9 +470,13 @@ public class UpdateService : IUpdateService
             TrackName = x.TrackName.ToLower()
         }))
         {
-            var alias = (string)this._cache.Get(CacheKeyForAlias(track.Key.ArtistName.ToLower()));
+            var alias = await this._aliasService.GetAlias(track.Key.ArtistName.ToLower());
 
-            var artistName = alias ?? track.First().ArtistName;
+            var artistName = track.First().ArtistName;
+            if (alias != null && !alias.Options.HasFlag(AliasOption.DisableInPlays))
+            {
+                artistName = alias.ArtistName;
+            }
 
             userTracks.TryGetValue(artistName.ToLower(), out var userArtistTracks);
 
@@ -607,12 +592,12 @@ public class UpdateService : IUpdateService
 
             var timeSpan = TimeSpan.FromMinutes(timeToCache);
 
-            this._cache.Set($"{userId}-lastplay-artist-{userPlay.ArtistName}", userPlay, timeSpan);
-            this._cache.Set($"{userId}-lastplay-track-{userPlay.ArtistName}-{userPlay.TrackName}", userPlay, timeSpan);
+            this._cache.Set($"{userId}-lp-artist-{userPlay.ArtistName}", userPlay, timeSpan);
+            this._cache.Set($"{userId}-lp-track-{userPlay.ArtistName}-{userPlay.TrackName}", userPlay, timeSpan);
 
             if (userPlay.AlbumName != null)
             {
-                this._cache.Set($"{userId}-lastplay-album-{userPlay.ArtistName}-{userPlay.AlbumName}", userPlay, timeSpan);
+                this._cache.Set($"{userId}-lp-album-{userPlay.ArtistName}-{userPlay.AlbumName}", userPlay, timeSpan);
             }
         }
     }
@@ -700,22 +685,6 @@ public class UpdateService : IUpdateService
         }
 
         await db.SaveChangesAsync();
-    }
-
-    private async Task RemoveInactiveUserIfExists(User user)
-    {
-        await using var db = await this._contextFactory.CreateDbContextAsync();
-
-        var existingInactiveUser = await db.InactiveUsers.FirstOrDefaultAsync(f => f.UserId == user.UserId);
-
-        if (existingInactiveUser != null)
-        {
-            db.InactiveUsers.Remove(existingInactiveUser);
-
-            Log.Information("InactiveUsers: Removed user {userId} | {userNameLastFm}", user.UserId, user.UserNameLastFM);
-
-            await db.SaveChangesAsync();
-        }
     }
 
     public async Task CorrectUserArtistPlaycount(int userId, string artistName, long correctPlaycount)

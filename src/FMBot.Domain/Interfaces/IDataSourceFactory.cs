@@ -8,8 +8,6 @@ namespace FMBot.Domain.Interfaces;
 
 public interface IDataSourceFactory
 {
-    Task<ImportUser> GetImportUserForLastFmUserName(string lastFmUserName);
-
     Task<Response<RecentTrackList>> GetRecentTracksAsync(string lastFmUserName, int count = 2, bool useCache = false,
         string sessionKey = null, long? fromUnixTimestamp = null, int amountOfPages = 1);
 
@@ -21,9 +19,9 @@ public interface IDataSourceFactory
 
     Task<DataSourceUser> GetLfmUserInfoAsync(string lastFmUserName);
     Task<Response<TrackInfo>> SearchTrackAsync(string searchQuery);
-    Task<Response<TrackInfo>> GetTrackInfoAsync(string trackName, string artistName, string username = null);
+    Task<Response<TrackInfo>> GetTrackInfoAsync(string trackName, string artistName, string username = null, bool redirectsEnabled = true);
     Task<Response<ArtistInfo>> GetArtistInfoAsync(string artistName, string username, bool redirectsEnabled = true);
-    Task<Response<AlbumInfo>> GetAlbumInfoAsync(string artistName, string albumName, string username = null);
+    Task<Response<AlbumInfo>> GetAlbumInfoAsync(string artistName, string albumName, string username = null, bool redirectsEnabled = true);
     Task<Response<AlbumInfo>> SearchAlbumAsync(string searchQuery);
 
     Task<Response<TopAlbumList>> GetTopAlbumsAsync(string lastFmUserName,
@@ -53,6 +51,6 @@ public interface IDataSourceFactory
     Task<bool> UnLoveTrackAsync(string lastFmSessionKey, string artistName, string trackName);
     Task<Response<bool>> SetNowPlayingAsync(string lastFmSessionKey, string artistName, string trackName,
         string albumName = null);
-    Task<Response<StoredPlayResponse>> ScrobbleAsync(string lastFmSessionKey, string artistName, string trackName, string albumName = null);
+    Task<Response<StoredPlayResponse>> ScrobbleAsync(string lastFmSessionKey, string artistName, string trackName, string albumName = null, DateTime? timeStamp = null);
 
 }

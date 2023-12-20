@@ -19,6 +19,7 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
@@ -26,7 +27,7 @@ using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using Microsoft.Extensions.Options;
 
-namespace FMBot.Bot.TextCommands.LastFM;
+namespace FMBot.Bot.TextCommands;
 
 [Name("User settings")]
 public class UserCommands : BaseCommandModule
@@ -93,24 +94,49 @@ public class UserCommands : BaseCommandModule
         this._openAiService = openAiService;
     }
 
-    [Command("stats", RunMode = RunMode.Async)]
+    [Command("settings", RunMode = RunMode.Async)]
+    [Summary("Shows user settings for .fmbot")]
+    [UsernameSetRequired]
+    [CommandCategories(CommandCategory.ServerSettings)]
+    [Alias("userconfig", "usersettings", "usersetting")]
+    public async Task UserSettingsAsync([Remainder] string searchValues = null)
+    {
+        _ = this.Context.Channel.TriggerTypingAsync();
+
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+
+        try
+        {
+            var response = await this._userBuilder.GetUserSettings(new ContextModel(this.Context, prfx, contextUser));
+
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [Command("profile", RunMode = RunMode.Async)]
     [Summary("Displays user stats related to Last.fm and .fmbot")]
     [UsernameSetRequired]
-    [Alias("profile", "user")]
+    [Alias("stats", "user")]
     [CommandCategories(CommandCategory.Other)]
     public async Task StatsAsync([Remainder] string userOptions = null)
     {
         _ = this.Context.Channel.TriggerTypingAsync();
 
-        var user = await this._userService.GetFullUserAsync(this.Context.User.Id);
+        var contextUser = await this._userService.GetFullUserAsync(this.Context.User.Id);
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
         try
         {
-            var userSettings = await this._settingService.GetUser(userOptions, user, this.Context);
+            var userSettings = await this._settingService.GetUser(userOptions, contextUser, this.Context, true);
 
             var response =
-                await this._userBuilder.StatsAsync(new ContextModel(this.Context, prfx, user), userSettings, user);
+                await this._userBuilder.ProfileAsync(new ContextModel(this.Context, prfx, contextUser), userSettings);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -251,17 +277,12 @@ public class UserCommands : BaseCommandModule
         var user = await this._userService.GetUserAsync(this.Context.User.Id);
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
-        if (user.UserType == UserType.User)
+        var supporterRequiredResponse = UserBuilder.UserReactionsSupporterRequired(new ContextModel(this.Context, prfx, user), prfx);
+
+        if (supporterRequiredResponse != null)
         {
-            this._embed.WithDescription($"Only supporters can set their own automatic emoji reactions.\n\n" +
-                                        $"[Get supporter here]({Constants.GetSupporterDiscordLink}), or alternatively use the `{prfx}serverreactions` command to set server-wide automatic emoji reactions.");
-
-            var components = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: SupporterService.GetSupporterLink());
-
-            this._embed.WithColor(DiscordConstants.InformationColorBlue);
-            await ReplyAsync(embed: this._embed.Build(), components: components.Build());
-
-            this.Context.LogCommandUsed(CommandResponse.SupporterRequired);
+            await this.Context.SendResponse(this.Interactivity, supporterRequiredResponse);
+            this.Context.LogCommandUsed(supporterRequiredResponse.CommandResponse);
             return;
         }
 
@@ -377,7 +398,7 @@ public class UserCommands : BaseCommandModule
 
             if (message != null && response.CommandResponse == CommandResponse.Ok)
             {
-                if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any())
+                if (contextUser?.EmoteReactions != null && contextUser.EmoteReactions.Any())
                 {
                     await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
                 }
@@ -498,7 +519,6 @@ public class UserCommands : BaseCommandModule
     [Summary("Sends you a dm so you can configure your `fm` command.\n\n" +
              "Servers can override your mode with `{{prfx}}servermode`.")]
     [Examples("mode")]
-    [Alias("md", "mode")]
     [UsernameSetRequired]
     [CommandCategories(CommandCategory.UserSettings)]
     public async Task ModeAsync(params string[] otherSettings)
@@ -509,7 +529,7 @@ public class UserCommands : BaseCommandModule
             var guild = await this._guildService.GetGuildAsync(this.Context.Guild?.Id);
 
             var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var response = UserBuilder.Mode(new ContextModel(this.Context, prfx, contextUser), guild);
+            var response = UserBuilder.FmMode(new ContextModel(this.Context, prfx, contextUser), guild);
 
             await this.Context.User.SendMessageAsync(embed: response.Embed.Build(),
                 components: response.Components.Build());
@@ -529,26 +549,36 @@ public class UserCommands : BaseCommandModule
         }
     }
 
-    [Command("wkmode", RunMode = RunMode.Async)]
-    [Summary("Change how your whoknows commands look.")]
-    [Options("Modes: `embed` or `image`")]
-    [Examples("wkmode embed", "wkmode image")]
+    [Command("responsemode", RunMode = RunMode.Async)]
+    [Summary("Change how your whoknows and top list commands look.")]
+    [Examples("responsemode")]
     [UsernameSetRequired]
+    [Alias("wkmode", "topmode", "toplistmode")]
     [CommandCategories(CommandCategory.UserSettings)]
-    public async Task WkModeAsync(params string[] otherSettings)
+    public async Task ResponseModeAsync(params string[] otherSettings)
     {
-        var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
-        var newUserSettings = UserService.SetWkMode(userSettings, otherSettings);
+        var response = UserBuilder.ResponseMode(new ContextModel(this.Context, prfx, contextUser));
 
-        await this._userService.SetLastFm(this.Context.User, newUserSettings);
+        await this.Context.SendResponse(this.Interactivity, response);
+        this.Context.LogCommandUsed(response.CommandResponse);
+    }
 
-        var setReply = $"Your default `WhoKnows` mode has been set to **{newUserSettings.Mode}**.";
+    [Command("mode", RunMode = RunMode.Async)]
+    [UsernameSetRequired]
+    [ExcludeFromHelp]
+    [Alias("md")]
+    public async Task PickModeAsync(params string[] otherSettings)
+    {
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
-        this._embed.WithColor(DiscordConstants.InformationColorBlue);
-        this._embed.WithDescription(setReply);
-        await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-        this.Context.LogCommandUsed();
+        var response = UserBuilder.ModePick(new ContextModel(this.Context, prfx, contextUser));
+
+        await this.Context.SendResponse(this.Interactivity, response);
+        this.Context.LogCommandUsed(response.CommandResponse);
     }
 
     [Command("privacy", RunMode = RunMode.Async)]
@@ -561,9 +591,9 @@ public class UserCommands : BaseCommandModule
     [CommandCategories(CommandCategory.UserSettings)]
     public async Task PrivacyAsync([Remainder] string _ = null)
     {
+        var contextUser = await this._userService.GetFullUserAsync(this.Context.User.Id);
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
-        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
         var response = UserBuilder.Privacy(new ContextModel(this.Context, prfx, contextUser));
 
         await this.Context.SendResponse(this.Interactivity, response);
@@ -665,11 +695,10 @@ public class UserCommands : BaseCommandModule
             var newUserSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
             await authorizeMessage.ModifyAsync(m =>
             {
+                var settingCommand = PublicProperties.SlashCommands.ContainsKey("settings") ? $"</settings:{PublicProperties.SlashCommands["settings"]}>" : "`/settings`";
                 var description =
                     $"✅ You have been logged in to .fmbot with the username [{newUserSettings.UserNameLastFM}]({LastfmUrlExtensions.GetUserUrl(newUserSettings.UserNameLastFM)})!\n\n" +
-                    $"`.fmmode` has been set to: `{newUserSettings.FmEmbedType}`\n" +
-                    $"`.wkmode` has been set to: `{newUserSettings.Mode ?? WhoKnowsMode.Embed}`\n" +
-                    $"`.fmprivacy` has been set to: `{newUserSettings.PrivacyLevel}`";
+                    $"Use {settingCommand} to change your settings and to customize your .fmbot experience.";
 
                 var sourceGuildId = this.Context.Guild?.Id;
                 var sourceChannel = this.Context.Channel;
@@ -737,34 +766,19 @@ public class UserCommands : BaseCommandModule
     [CommandCategories(CommandCategory.UserSettings)]
     public async Task RemoveAsync([Remainder] string confirmation = null)
     {
-        var userSettings = await this._userService.GetFullUserAsync(this.Context.User.Id);
+        var contextUser = await this._userService.GetFullUserAsync(this.Context.User.Id);
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
-        if (userSettings == null)
+        if (contextUser == null)
         {
             await ReplyAsync("Sorry, but we don't have any data from you in our database.");
             this.Context.LogCommandUsed(CommandResponse.NotFound);
             return;
         }
 
-        if (string.IsNullOrEmpty(confirmation) || confirmation.ToLower() != "confirm")
-        {
-            var embed = UserBuilder.GetRemoveDataEmbed(userSettings, prfx);
+        var response = UserBuilder.RemoveDataResponse(new ContextModel(this.Context, prfx, contextUser));
 
-            await this.Context.Channel.SendMessageAsync("", false, embed.Build());
-        }
-        else
-        {
-            _ = this.Context.Channel.TriggerTypingAsync();
-
-            await this._friendsService.RemoveAllFriendsAsync(userSettings.UserId);
-            await this._friendsService.RemoveUserFromOtherFriendsAsync(userSettings.UserId);
-
-            await this._userService.DeleteUser(userSettings.UserId);
-
-            await ReplyAsync("Your settings, friends and any other data have been successfully deleted from .fmbot.");
-        }
-
-        this.Context.LogCommandUsed();
+        await this.Context.SendResponse(this.Interactivity, response);
+        this.Context.LogCommandUsed(response.CommandResponse);
     }
 }

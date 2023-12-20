@@ -19,9 +19,9 @@ public interface ILastfmRepository
 
     Task<DataSourceUser> GetLfmUserInfoAsync(string lastFmUserName);
     Task<Response<TrackInfo>> SearchTrackAsync(string searchQuery);
-    Task<Response<TrackInfo>> GetTrackInfoAsync(string trackName, string artistName, string username = null);
+    Task<Response<TrackInfo>> GetTrackInfoAsync(string trackName, string artistName, bool redirectsEnabled, string username = null);
     Task<Response<ArtistInfo>> GetArtistInfoAsync(string artistName, string username, bool redirectsEnabled);
-    Task<Response<AlbumInfo>> GetAlbumInfoAsync(string artistName, string albumName, string username = null);
+    Task<Response<AlbumInfo>> GetAlbumInfoAsync(string artistName, string albumName, bool redirectsEnabled, string username = null);
     Task<Response<AlbumInfo>> SearchAlbumAsync(string searchQuery);
 
     Task<Response<TopAlbumList>> GetTopAlbumsAsync(string lastFmUserName,
@@ -60,5 +60,5 @@ public interface ILastfmRepository
     Task<bool> UnLoveTrackAsync(string lastFmSessionKey, string artistName, string trackName);
     Task<Response<bool>> SetNowPlayingAsync(string lastFmSessionKey, string artistName, string trackName,
         string albumName = null);
-    Task<Response<StoredPlayResponse>> ScrobbleAsync(string lastFmSessionKey, string artistName, string trackName, string albumName = null);
+    Task<Response<StoredPlayResponse>> ScrobbleAsync(string lastFmSessionKey, string artistName, string trackName, string albumName = null, DateTime? timeStamp = null);
 }

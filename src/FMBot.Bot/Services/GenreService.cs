@@ -130,7 +130,7 @@ public class GenreService
             var cacheAvailable = this._cache.TryGetValue(cacheKey, out List<string> genres);
             if (!cacheAvailable && cacheEnabled)
             {
-                const string sql = "SELECT name " +
+                const string sql = "SELECT DISTINCT name " +
                                    "FROM public.artist_genres ";
 
                 DefaultTypeMap.MatchNamesWithUnderscores = true;
@@ -142,11 +142,9 @@ public class GenreService
                 this._cache.Set(cacheKey, genres, TimeSpan.FromHours(2));
             }
 
-            searchValue = searchValue.ToLower();
+            var results = genres.Where(w => w.StartsWith(searchValue, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            var results = genres.Where(w => w.StartsWith(searchValue)).ToList();
-
-            results.AddRange(genres.Where(w => w.Contains(searchValue)));
+            results.AddRange(genres.Where(w => w.Contains(searchValue, StringComparison.OrdinalIgnoreCase)));
 
             return results;
         }
@@ -181,6 +179,15 @@ public class GenreService
                 UserPlaycount = s.Sum(se => se.Playcount),
                 GenreName = s.Key
             }).ToList();
+    }
+
+    public List<TopListObject> GetTopListForTopGenres(List<TopGenre> topGenres)
+    {
+        return topGenres.Select(s => new TopListObject
+        {
+            Name = s.GenreName,
+            Playcount = s.UserPlaycount.GetValueOrDefault()
+        }).ToList();
     }
 
     public async Task<List<AffinityItemDto>> GetTopGenresWithPositionForTopArtists(IEnumerable<AffinityItemDto> topArtists)

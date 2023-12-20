@@ -1,10 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics.Eventing.Reader;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Threading.Tasks;
-using Discord;
 using Discord.Commands;
 using Fergun.Interactive;
 using FMBot.Bot.Attributes;
@@ -17,13 +13,8 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Domain;
 using FMBot.Domain.Enums;
-using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
-using FMBot.Domain.Types;
-using FMBot.LastFM.Domain.Types;
-using FMBot.LastFM.Repositories;
-using FMBot.Persistence.Domain.Models;
 using Microsoft.Extensions.Options;
 using TimePeriod = FMBot.Domain.Models.TimePeriod;
 
@@ -93,9 +84,46 @@ public class ArtistCommands : BaseCommandModule
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
         var redirectsEnabled = SettingService.RedirectsEnabled(artistValues);
 
+        var userSettings = await this._settingService.GetUser(artistValues, contextUser, this.Context);
+
         try
         {
-            var response = await this._artistBuilders.ArtistAsync(new ContextModel(this.Context, prfx, contextUser), redirectsEnabled.NewSearchValue, redirectsEnabled.Enabled);
+            var response = await this._artistBuilders.ArtistInfoAsync(new ContextModel(this.Context, prfx, contextUser),
+                userSettings, redirectsEnabled.NewSearchValue, redirectsEnabled.Enabled);
+
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [Command("artistoverview", RunMode = RunMode.Async)]
+    [Summary("Artist you're currently listening to or searching for.")]
+    [Examples(
+        "ao",
+        "artistoverview",
+        "ao Gorillaz",
+        "artistoverview Gamma Intel")]
+    [Alias("ao", "artist overview", "artistsoverview", "artists overview")]
+    [UsernameSetRequired]
+    [CommandCategories(CommandCategory.Artists)]
+    public async Task ArtistOverviewAsync([Remainder] string artistValues = null)
+    {
+        _ = this.Context.Channel.TriggerTypingAsync();
+
+        var contextUser = await this._userService.GetUserWithDiscogs(this.Context.User.Id);
+        var userSettings = await this._settingService.GetUser(artistValues, contextUser, this.Context);
+
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+        var redirectsEnabled = SettingService.RedirectsEnabled(userSettings.NewSearchValue);
+
+        try
+        {
+            var response = await this._artistBuilders.ArtistOverviewAsync(new ContextModel(this.Context, prfx, contextUser),
+                userSettings, redirectsEnabled.NewSearchValue, redirectsEnabled.Enabled);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -148,95 +176,15 @@ public class ArtistCommands : BaseCommandModule
 
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
         var userSettings = await this._settingService.GetUser(artistValues, contextUser, this.Context);
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+
         var redirectsEnabled = SettingService.RedirectsEnabled(userSettings.NewSearchValue);
 
-        var response = new ResponseModel();
-        var artist = await this._artistsService.SearchArtist(response,
-            this.Context.User,
-            redirectsEnabled.NewSearchValue,
-            contextUser.UserNameLastFM,
-            contextUser.SessionKeyLastFm,
-            userSettings.UserNameLastFm,
-            true,
-            userSettings.UserId,
-            redirectsEnabled: redirectsEnabled.Enabled);
-        if (artist.Artist == null)
-        {
-            await this.Context.SendResponse(this.Interactivity, response);
-            this.Context.LogCommandUsed(response.CommandResponse);
-            return;
-        }
+        var response = await this._artistBuilders.ArtistAlbumsAsync(new ContextModel(this.Context, prfx, contextUser),
+            userSettings, redirectsEnabled.NewSearchValue, redirectsEnabled.Enabled);
 
-        var topAlbums = await this._artistsService.GetTopAlbumsForArtist(userSettings.UserId, artist.Artist.ArtistName);
-        var userTitle = await this._userService.GetUserTitleAsync(this.Context);
-
-        if (topAlbums.Count == 0)
-        {
-            this._embed.WithDescription(
-                $"{StringExtensions.Sanitize(userSettings.DisplayName)}{userSettings.UserType.UserTypeToIcon()} has no scrobbles for this artist or their scrobbles have no album associated with them.");
-            await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-            this.Context.LogCommandUsed(CommandResponse.NoScrobbles);
-            return;
-        }
-
-        var url = $"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library/music/{UrlEncoder.Default.Encode(artist.Artist.ArtistName)}";
-        if (Uri.IsWellFormedUriString(url, UriKind.Absolute))
-        {
-            this._embedAuthor.WithUrl(url);
-        }
-
-        var pages = new List<PageBuilder>();
-        var albumPages = topAlbums.ChunkBy(10);
-
-        var counter = 1;
-        var pageCounter = 1;
-        foreach (var albumPage in albumPages)
-        {
-            var albumPageString = new StringBuilder();
-            foreach (var artistAlbum in albumPage)
-            {
-                albumPageString.AppendLine($"{counter}. **{artistAlbum.Name}** - *{artistAlbum.Playcount} {StringExtensions.GetPlaysString(artistAlbum.Playcount)}*");
-                counter++;
-            }
-
-            var footer = new StringBuilder();
-            footer.Append($"Page {pageCounter}/{albumPages.Count}");
-            var title = new StringBuilder();
-
-            if (userSettings.DifferentUser && userSettings.UserId != contextUser.UserId)
-            {
-                footer.AppendLine($" - {userSettings.UserNameLastFm} has {artist.Artist.UserPlaycount} total scrobbles on this artist");
-                footer.AppendLine($"Requested by {userTitle}");
-                title.Append($"{userSettings.DisplayName}'s top albums for '{artist.Artist.ArtistName}'");
-            }
-            else
-            {
-                footer.Append($" - {userTitle} has {artist.Artist.UserPlaycount} total scrobbles on this artist");
-                title.Append($"Your top albums for '{artist.Artist.ArtistName}'");
-
-                this._embedAuthor.WithIconUrl(this.Context.User.GetAvatarUrl());
-            }
-
-            this._embedAuthor.WithName(title.ToString());
-
-            var page = new PageBuilder()
-                .WithDescription(albumPageString.ToString())
-                .WithAuthor(this._embedAuthor)
-                .WithFooter(footer.ToString());
-
-            pages.Add(page);
-            pageCounter++;
-        }
-
-        var paginator = StringService.BuildStaticPaginator(pages);
-
-        _ = this.Interactivity.SendPaginatorAsync(
-            paginator,
-            this.Context.Channel,
-            TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds));
-
-        await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-        this.Context.LogCommandUsed();
+        await this.Context.SendResponse(this.Interactivity, response);
+        this.Context.LogCommandUsed(response.CommandResponse);
     }
 
     [Command("artistplays", RunMode = RunMode.Async)]
@@ -258,31 +206,15 @@ public class ArtistCommands : BaseCommandModule
         _ = this.Context.Channel.TriggerTypingAsync();
 
         var userSettings = await this._settingService.GetUser(artistValues, contextUser, this.Context);
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
         var redirectsEnabled = SettingService.RedirectsEnabled(userSettings.NewSearchValue);
 
-        var artist = await GetArtist(redirectsEnabled.NewSearchValue, contextUser.UserNameLastFM, contextUser.SessionKeyLastFm, userSettings.UserNameLastFm);
-        if (artist == null)
-        {
-            return;
-        }
+        var response = await this._artistBuilders.ArtistPlaysAsync(new ContextModel(this.Context, prfx, contextUser),
+            userSettings,
+            redirectsEnabled.NewSearchValue, redirectsEnabled.Enabled);
 
-        var reply =
-            $"**{StringExtensions.Sanitize(userSettings.DisplayName)}{userSettings.UserType.UserTypeToIcon()}** has " +
-            $"`{artist.UserPlaycount}` {StringExtensions.GetPlaysString(artist.UserPlaycount)} for " +
-            $"**{StringExtensions.Sanitize(artist.ArtistName)}**";
-
-        if (!userSettings.DifferentUser && contextUser.LastUpdated != null)
-        {
-            var playsLastWeek =
-                await this._playService.GetArtistPlaycountForTimePeriodAsync(userSettings.UserId, artist.ArtistName);
-            if (playsLastWeek != 0)
-            {
-                reply += $" (`{playsLastWeek}` last week)";
-            }
-        }
-
-        await this.Context.Channel.SendMessageAsync(reply, allowedMentions: AllowedMentions.None);
-        this.Context.LogCommandUsed();
+        await this.Context.SendResponse(this.Interactivity, response);
+        this.Context.LogCommandUsed(response.CommandResponse);
     }
 
     [Command("artistpace", RunMode = RunMode.Async)]
@@ -326,7 +258,7 @@ public class ArtistCommands : BaseCommandModule
     [Command("topartists", RunMode = RunMode.Async)]
     [Summary("Shows your or someone else's top artists over a certain time period.")]
     [Options(Constants.CompactTimePeriodList, Constants.UserMentionExample,
-        Constants.BillboardExample, Constants.ExtraLargeExample)]
+        Constants.BillboardExample, Constants.EmbedSizeExample)]
     [Examples("ta", "topartists", "ta a lfm:fm-bot", "topartists weekly @user", "ta bb xl")]
     [Alias("al", "as", "ta", "artistlist", "artists", "top artists", "artistslist")]
     [UsernameSetRequired]
@@ -351,12 +283,13 @@ public class ArtistCommands : BaseCommandModule
             }
 
             var timeSettings = SettingService.GetTimePeriod(topListSettings.NewSearchValue, topListSettings.Discogs ? TimePeriod.AllTime : TimePeriod.Weekly, registeredLastFm: userSettings.RegisteredLastFm);
+            var mode = SettingService.SetMode(extraOptions, contextUser.Mode);
 
             var response = topListSettings.Discogs
                 ? await this._discogsBuilders.DiscogsTopArtistsAsync(new ContextModel(this.Context, prfx, contextUser),
                     topListSettings, timeSettings, userSettings)
                 : await this._artistBuilders.TopArtistsAsync(new ContextModel(this.Context, prfx, contextUser),
-                    topListSettings, timeSettings, userSettings);
+                    topListSettings, timeSettings, userSettings, mode.mode);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -372,9 +305,55 @@ public class ArtistCommands : BaseCommandModule
         }
     }
 
+    [Command("discoveries", RunMode = RunMode.Async)]
+    [Summary("Shows the artists you've recently discovered.")]
+    [Options(Constants.CompactTimePeriodList, Constants.UserMentionExample, Constants.EmbedSizeExample)]
+    [Examples("d", "discovered", "ta a lfm:fm-bot", "topartists weekly @user", "ta bb xl")]
+    [Alias("d", "discovered", "discovery", "artistdiscoveries", "firstlistened")]
+    [UsernameSetRequired]
+    [SupportsPagination]
+    [CommandCategories(CommandCategory.Artists)]
+    public async Task ArtistDiscoveriesAsync([Remainder] string extraOptions = null)
+    {
+        _ = this.Context.Channel.TriggerTypingAsync();
+
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        try
+        {
+            var context = new ContextModel(this.Context, prfx, contextUser);
+            var userSettings = await this._settingService.GetUser(extraOptions, contextUser, this.Context);
+
+            var supporterRequiredResponse = ArtistBuilders.DiscoverySupporterRequired(context, userSettings);
+
+            if (supporterRequiredResponse != null)
+            {
+                await this.Context.SendResponse(this.Interactivity, supporterRequiredResponse);
+                this.Context.LogCommandUsed(supporterRequiredResponse.CommandResponse);
+                return;
+            }
+
+            var topListSettings = SettingService.SetTopListSettings(extraOptions);
+            userSettings.RegisteredLastFm ??= await this._indexService.AddUserRegisteredLfmDate(userSettings.UserId);
+
+            var timeSettings = SettingService.GetTimePeriod(topListSettings.NewSearchValue, TimePeriod.Quarterly, registeredLastFm: userSettings.RegisteredLastFm);
+            var mode = SettingService.SetMode(timeSettings.NewSearchValue, contextUser.Mode);
+
+            var response = await this._artistBuilders.ArtistDiscoveriesAsync(context, topListSettings, timeSettings, userSettings, mode.mode);
+
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [Command("taste", RunMode = RunMode.Async)]
     [Summary("Compares your top artists, genres and countries to those from another user.")]
-    [Options(Constants.CompactTimePeriodList, Constants.UserMentionOrLfmUserNameExample, "Mode: `table` or `embed`", "XXL")]
+    [Options(Constants.CompactTimePeriodList, Constants.UserMentionOrLfmUserNameExample, "Mode: `table` or `embed`", Constants.EmbedSizeExample)]
     [Examples("t frikandel_", "t @user", "taste bitldev", "taste @user monthly embed")]
     [UsernameSetRequired]
     [Alias("t")]
@@ -394,7 +373,7 @@ public class ArtistCommands : BaseCommandModule
 
         var tasteSettings = new TasteSettings
         {
-            ExtraLarge = false
+            EmbedSize = EmbedSize.Default
         };
 
         tasteSettings = this._artistsService.SetTasteSettings(tasteSettings, timeSettings.NewSearchValue);
@@ -432,7 +411,7 @@ public class ArtistCommands : BaseCommandModule
 
             var currentSettings = new WhoKnowsSettings
             {
-                WhoKnowsMode = contextUser.Mode ?? WhoKnowsMode.Embed,
+                ResponseMode = contextUser.Mode ?? ResponseMode.Embed,
                 NewSearchValue = artistValues,
                 DisplayRoleFilter = false
             };
@@ -442,7 +421,7 @@ public class ArtistCommands : BaseCommandModule
             var response = await this._artistBuilders.WhoKnowsArtistAsync(new ContextModel(this.Context,
                     prfx,
                     contextUser),
-                settings.WhoKnowsMode,
+                settings.ResponseMode,
                 settings.NewSearchValue,
                 settings.DisplayRoleFilter,
                 redirectsEnabled: settings.RedirectsEnabled);
@@ -486,7 +465,7 @@ public class ArtistCommands : BaseCommandModule
                 ShowBotters = false,
                 AdminView = false,
                 NewSearchValue = artistValues,
-                WhoKnowsMode = contextUser.Mode ?? WhoKnowsMode.Embed
+                ResponseMode = contextUser.Mode ?? ResponseMode.Embed
             };
 
             var settings = this._settingService.SetWhoKnowsSettings(currentSettings, artistValues, contextUser.UserType);
@@ -530,7 +509,7 @@ public class ArtistCommands : BaseCommandModule
         {
             var currentSettings = new WhoKnowsSettings
             {
-                WhoKnowsMode = contextUser.Mode ?? WhoKnowsMode.Embed,
+                ResponseMode = contextUser.Mode ?? ResponseMode.Embed,
                 NewSearchValue = artistValues
             };
 
@@ -538,7 +517,7 @@ public class ArtistCommands : BaseCommandModule
 
             var response = await this._artistBuilders
                 .FriendsWhoKnowArtistAsync(new ContextModel(this.Context, prfx, contextUser),
-                    currentSettings.WhoKnowsMode, settings.NewSearchValue, settings.RedirectsEnabled);
+                    currentSettings.ResponseMode, settings.NewSearchValue, settings.RedirectsEnabled);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -671,72 +650,6 @@ public class ArtistCommands : BaseCommandModule
         catch (Exception e)
         {
             await this.Context.HandleCommandException(e);
-        }
-    }
-
-    private async Task<ArtistInfo> GetArtist(string artistValues, string lastFmUserName, string sessionKey = null, string otherUserUsername = null, User user = null)
-    {
-        if (!string.IsNullOrWhiteSpace(artistValues) && artistValues.Length != 0)
-        {
-            if (otherUserUsername != null)
-            {
-                lastFmUserName = otherUserUsername;
-            }
-
-            var artistCall = await this._dataSourceFactory.GetArtistInfoAsync(artistValues, lastFmUserName);
-            if (!artistCall.Success && artistCall.Error == ResponseStatus.MissingParameters)
-            {
-                this._embed.WithDescription($"Artist `{artistValues}` could not be found, please check your search values and try again.");
-                await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-                this.Context.LogCommandUsed(CommandResponse.NotFound);
-                return null;
-            }
-            if (!artistCall.Success || artistCall.Content == null)
-            {
-                this._embed.ErrorResponse(artistCall.Error, artistCall.Message, this.Context.Message.Content, this.Context.User, "artist");
-                await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-                this.Context.LogCommandUsed(CommandResponse.LastFmError);
-                return null;
-            }
-
-            return artistCall.Content;
-        }
-        else
-        {
-            Response<RecentTrackList> recentScrobbles;
-
-            if (user != null)
-            {
-                recentScrobbles = await this._updateService.UpdateUserAndGetRecentTracks(user);
-            }
-            else
-            {
-                recentScrobbles = await this._dataSourceFactory.GetRecentTracksAsync(lastFmUserName, 1, true, sessionKey);
-            }
-
-            if (await GenericEmbedService.RecentScrobbleCallFailedReply(recentScrobbles, lastFmUserName, this.Context))
-            {
-                return null;
-            }
-
-            if (otherUserUsername != null)
-            {
-                lastFmUserName = otherUserUsername;
-            }
-
-            var lastPlayedTrack = recentScrobbles.Content.RecentTracks[0];
-
-            var artistCall = await this._dataSourceFactory.GetArtistInfoAsync(lastPlayedTrack.ArtistName, lastFmUserName);
-
-            if (artistCall.Content == null || !artistCall.Success)
-            {
-                this._embed.WithDescription($"Last.fm did not return a result for **{lastPlayedTrack.ArtistName}**.");
-                await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
-                this.Context.LogCommandUsed(CommandResponse.NotFound);
-                return null;
-            }
-
-            return artistCall.Content;
         }
     }
 }

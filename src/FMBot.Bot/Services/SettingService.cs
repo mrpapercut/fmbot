@@ -1,8 +1,10 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using Discord;
 using Discord.Commands;
@@ -14,7 +16,6 @@ using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using IF.Lastfm.Core.Api.Enums;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace FMBot.Bot.Services;
 
@@ -392,7 +393,7 @@ public class SettingService
         var topListSettings = new TopListSettings
         {
             Billboard = false,
-            ExtraLarge = false,
+            EmbedSize = EmbedSize.Default,
             Discogs = false,
             NewSearchValue = extraOptions
         };
@@ -410,11 +411,19 @@ public class SettingService
         }
 
         var extraLarge = new[] { "xl", "xxl", "extralarge" };
+        var extraSmall = new[] { "xs", "xxs", "extrasmall" };
         if (Contains(extraOptions, extraLarge))
         {
             topListSettings.NewSearchValue = ContainsAndRemove(topListSettings.NewSearchValue, extraLarge);
-            topListSettings.ExtraLarge = true;
+            topListSettings.EmbedSize = EmbedSize.Large;
         }
+        else if (Contains(extraOptions, extraSmall))
+        {
+            topListSettings.NewSearchValue = ContainsAndRemove(topListSettings.NewSearchValue, extraSmall);
+            topListSettings.EmbedSize = EmbedSize.Small;
+        }
+
+
         var discogs = new[] { "dc", "discogs" };
         if (Contains(extraOptions, discogs))
         {
@@ -431,6 +440,28 @@ public class SettingService
         return topListSettings;
     }
 
+    public static (ResponseMode mode, string newSearchValue) SetMode(string extraOptions, ResponseMode? userMode)
+    {
+        var newSearchValue = extraOptions;
+
+        var image = new[] { "img", "image" };
+        if (Contains(extraOptions, image))
+        {
+            newSearchValue = ContainsAndRemove(newSearchValue, image);
+            userMode = ResponseMode.Image;
+        }
+        var embed = new[] { "embed", "text", "txt" };
+        if (Contains(extraOptions, embed))
+        {
+            newSearchValue = ContainsAndRemove(newSearchValue, embed);
+            userMode = ResponseMode.Embed;
+        }
+
+        userMode ??= ResponseMode.Embed;
+
+        return (userMode.Value, newSearchValue);
+    }
+
     public WhoKnowsSettings SetWhoKnowsSettings(WhoKnowsSettings currentWhoKnowsSettings, string extraOptions, UserType userType = UserType.User)
     {
         var whoKnowsSettings = currentWhoKnowsSettings;
@@ -440,18 +471,10 @@ public class SettingService
             return whoKnowsSettings;
         }
 
-        var image = new[] { "img", "image" };
-        if (Contains(extraOptions, image))
-        {
-            whoKnowsSettings.NewSearchValue = ContainsAndRemove(whoKnowsSettings.NewSearchValue, image);
-            whoKnowsSettings.WhoKnowsMode = WhoKnowsMode.Image;
-        }
-        var embed = new[] { "embed", "text", "txt" };
-        if (Contains(extraOptions, embed))
-        {
-            whoKnowsSettings.NewSearchValue = ContainsAndRemove(whoKnowsSettings.NewSearchValue, embed);
-            whoKnowsSettings.WhoKnowsMode = WhoKnowsMode.Embed;
-        }
+        var mode = SetMode(extraOptions, currentWhoKnowsSettings.ResponseMode);
+
+        whoKnowsSettings.ResponseMode = mode.mode;
+        whoKnowsSettings.NewSearchValue = mode.newSearchValue;
 
         var hidePrivateUsers = new[] { "hp", "hideprivate", "hideprivateusers" };
         if (Contains(extraOptions, hidePrivateUsers))
@@ -472,6 +495,13 @@ public class SettingService
         {
             whoKnowsSettings.NewSearchValue = ContainsAndRemove(whoKnowsSettings.NewSearchValue, roleFilter);
             whoKnowsSettings.DisplayRoleFilter = true;
+        }
+
+        var qualityFilter = new[] { "nf", "nofilter" };
+        if (Contains(extraOptions, qualityFilter))
+        {
+            whoKnowsSettings.NewSearchValue = ContainsAndRemove(whoKnowsSettings.NewSearchValue, qualityFilter);
+            whoKnowsSettings.QualityFilterDisabled = true;
         }
 
         var (enabled, newSearchValue) = RedirectsEnabled(whoKnowsSettings.NewSearchValue);
@@ -501,6 +531,65 @@ public class SettingService
         }
 
         return (true, extraOptions);
+    }
+
+    public static (UpdateType updateType, bool optionPicked, string description) GetUpdateType(string extraOptions)
+    {
+        var updateType = new UpdateType();
+        var optionPicked = false;
+        var description = new StringBuilder();
+
+        var full = new[] { "full", "force", "f" };
+        if (Contains(extraOptions, full))
+        {
+            updateType |= UpdateType.Full;
+            optionPicked = true;
+            description.AppendLine("- Everything (full update)");
+        }
+        else
+        {
+            var allPlays = new[] { "plays", "allplays" };
+            if (Contains(extraOptions, allPlays))
+            {
+                updateType |= UpdateType.AllPlays;
+                optionPicked = true;
+                description.AppendLine("- All scrobbles");
+            }
+
+            var artists = new[] { "artists", "artist", "a" };
+            if (Contains(extraOptions, artists))
+            {
+                updateType |= UpdateType.Artist;
+                optionPicked = true;
+                description.AppendLine("- Your top artists");
+            }
+
+            var albums = new[] { "albums", "album", "ab" };
+            if (Contains(extraOptions, albums))
+            {
+                updateType |= UpdateType.Albums;
+                optionPicked = true;
+                description.AppendLine("- Your top albums");
+            }
+
+            var tracks = new[] { "tracks", "track", "tr" };
+            if (Contains(extraOptions, tracks))
+            {
+                updateType |= UpdateType.Tracks;
+                optionPicked = true;
+                description.AppendLine("- Your top tracks");
+            }
+        }
+
+        var discogs = new[] { "discogs", "discog", "vinyl", "collection" };
+        if (Contains(extraOptions, discogs))
+        {
+            updateType |= UpdateType.Discogs;
+            optionPicked = true;
+            description.AppendLine("- Your Discogs collection");
+        }
+
+        return (updateType, optionPicked, description.ToString());
     }
 
     public async Task<UserSettingsModel> GetUser(
@@ -533,6 +622,7 @@ public class SettingService
         var settingsModel = new UserSettingsModel
         {
             DifferentUser = false,
+            TimeZone = user.TimeZone,
             UserNameLastFm = user.UserNameLastFM,
             SessionKeyLastFm = user.SessionKeyLastFm,
             DiscordUserId = discordUser.Id,
@@ -559,6 +649,7 @@ public class SettingService
                 settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { options.First() }, true);
 
                 settingsModel.DisplayName = otherUser.UserNameLastFM;
+                settingsModel.TimeZone = otherUser.TimeZone ?? user.TimeZone;
                 settingsModel.DifferentUser = true;
                 settingsModel.DiscordUserId = otherUser.DiscordUserId;
                 settingsModel.UserNameLastFm = otherUser.UserNameLastFM;
@@ -609,6 +700,7 @@ public class SettingService
                 settingsModel.DifferentUser = true;
                 settingsModel.DiscordUserId = otherUser.DiscordUserId;
                 settingsModel.UserNameLastFm = otherUser.UserNameLastFM;
+                settingsModel.TimeZone = otherUser.TimeZone ?? user.TimeZone;
                 settingsModel.UserType = otherUser.UserType;
                 settingsModel.UserId = otherUser.UserId;
                 settingsModel.RegisteredLastFm = otherUser.RegisteredLastFm;
@@ -627,6 +719,7 @@ public class SettingService
                     settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { lfmUserName, $"lfm:{lfmUserName}" }, true);
 
                     settingsModel.DisplayName = foundLfmUser.UserNameLastFM;
+                    settingsModel.TimeZone = foundLfmUser.TimeZone ?? user.TimeZone;
                     settingsModel.DifferentUser = true;
                     settingsModel.DiscordUserId = foundLfmUser.DiscordUserId;
                     settingsModel.UserNameLastFm = foundLfmUser.UserNameLastFM;
@@ -651,6 +744,35 @@ public class SettingService
         }
 
         return settingsModel;
+    }
+
+    public async Task<UserSettingsModel> GetOriginalContextUser(
+        ulong discordUserId, ulong requesterUserId, IGuild discordGuild, IUser contextDiscordUser)
+    {
+        IGuildUser guildUser = null;
+        if (discordGuild != null)
+        {
+            guildUser = await discordGuild.GetUserAsync(discordUserId, CacheMode.CacheOnly);
+        }
+
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var targetUser = await db.Users.FirstOrDefaultAsync(f => f.DiscordUserId == discordUserId);
+
+        var differentUser = discordUserId != requesterUserId;
+
+        return new UserSettingsModel
+        {
+            DiscordUserId = targetUser.DiscordUserId,
+            DifferentUser = differentUser,
+            TimeZone = targetUser.TimeZone,
+            UserId = targetUser.UserId,
+            DisplayName = guildUser?.DisplayName ??
+                          (differentUser ? targetUser.UserNameLastFM : contextDiscordUser.GlobalName ?? contextDiscordUser.Username),
+            RegisteredLastFm = targetUser.RegisteredLastFm,
+            SessionKeyLastFm = targetUser.SessionKeyLastFm,
+            UserNameLastFm = targetUser.UserNameLastFM,
+            UserType = targetUser.UserType
+        };
     }
 
     public async Task<User> GetDifferentUser(string searchValue)
@@ -977,25 +1099,29 @@ public class SettingService
         return guildRankingSettings;
     }
 
-    public static CrownViewSettings SetCrownViewSettings(CrownViewSettings crownViewSettings, string extraOptions)
+    public static CrownViewType SetCrownViewSettings(string extraOptions)
     {
-        var setCrownViewSettings = crownViewSettings;
-
         if (string.IsNullOrWhiteSpace(extraOptions))
         {
-            return setCrownViewSettings;
+            return CrownViewType.Playcount;
         }
 
         if (extraOptions.Contains("p") || extraOptions.Contains("pc") || extraOptions.Contains("playcount") || extraOptions.Contains("plays"))
         {
-            setCrownViewSettings.CrownOrderType = CrownOrderType.Playcount;
+            return CrownViewType.Playcount;
         }
         if (extraOptions.Contains("r") || extraOptions.Contains("rc") || extraOptions.Contains("recent") || extraOptions.Contains("new") || extraOptions.Contains("latest"))
         {
-            setCrownViewSettings.CrownOrderType = CrownOrderType.Recent;
+            return CrownViewType.Recent;
         }
 
-        return setCrownViewSettings;
+        if (extraOptions.Contains("s") || extraOptions.Contains("stolen") || extraOptions.Contains("yoinked") ||
+            extraOptions.Contains("yeeted"))
+        {
+            return CrownViewType.Stolen;
+        }
+
+        return CrownViewType.Playcount;
     }
 
     private static bool Contains(string extraOptions, string[] values)

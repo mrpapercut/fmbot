@@ -9,11 +9,12 @@ using FMBot.Bot.Extensions;
 using FMBot.Bot.Models.Modals;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
+using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain.Attributes;
 using FMBot.Domain.Enums;
+using FMBot.Domain.Flags;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Repositories;
 
 namespace FMBot.Bot.SlashCommands;
 
@@ -24,17 +25,19 @@ public class AdminSlashCommands : InteractionModuleBase
     private readonly AlbumService _albumService;
     private readonly ArtistsService _artistService;
     private readonly IDataSourceFactory _dataSourceFactory;
+    private readonly AliasService _aliasService;
 
-    public AdminSlashCommands(AdminService adminService, CensorService censorService, AlbumService albumService, ArtistsService artistService, IDataSourceFactory dataSourceFactory)
+    public AdminSlashCommands(AdminService adminService, CensorService censorService, AlbumService albumService, ArtistsService artistService, IDataSourceFactory dataSourceFactory, AliasService aliasService)
     {
         this._adminService = adminService;
         this._censorService = censorService;
         this._albumService = albumService;
         this._artistService = artistService;
         this._dataSourceFactory = dataSourceFactory;
+        this._aliasService = aliasService;
     }
 
-    [ComponentInteraction(InteractionConstants.CensorTypes)]
+    [ComponentInteraction(InteractionConstants.ModerationCommands.CensorTypes)]
     public async Task SetCensoredArtist(string censoredId, string[] inputs)
     {
         var embed = new EmbedBuilder();
@@ -93,13 +96,68 @@ public class AdminSlashCommands : InteractionModuleBase
         await RespondAsync(embed: embed.Build());
     }
 
-    [ComponentInteraction(InteractionConstants.GlobalWhoKnowsReport)]
-    public async Task ReportGlobalWhoKnowsButton()
+    [ComponentInteraction(InteractionConstants.ModerationCommands.ArtistAlias)]
+    public async Task SetArtistAliasOptions(string censoredId, string[] inputs)
     {
-        await this.Context.Interaction.RespondWithModalAsync<ReportGlobalWhoKnowsModal>(InteractionConstants.GlobalWhoKnowsReportModal);
+        var embed = new EmbedBuilder();
+
+        var id = int.Parse(censoredId);
+        var artistAlias = await this._aliasService.GetArtistAliasForId(id);
+
+        if (!await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            return;
+        }
+
+        foreach (var option in Enum.GetNames(typeof(AliasOption)))
+        {
+            if (Enum.TryParse(option, out AliasOption flag))
+            {
+                if (inputs.Any(a => a == option))
+                {
+                    artistAlias.Options |= flag;
+                }
+                else
+                {
+                    artistAlias.Options &= ~flag;
+                }
+            }
+        }
+
+        artistAlias = await this._aliasService.SetAliasOptions(artistAlias, artistAlias.Options);
+
+        var description = new StringBuilder();
+
+        description.AppendLine($"Artist: `{artistAlias.Artist.Name}`");
+        description.AppendLine($"Alias: `{artistAlias.Alias}`");
+
+        description.AppendLine();
+        description.AppendLine("Artist alias has been updated to:");
+
+        foreach (var flag in artistAlias.Options.GetUniqueFlags())
+        {
+            if (artistAlias.Options.HasFlag(flag))
+            {
+                var name = flag.GetAttribute<OptionAttribute>().Name;
+                description.AppendLine($"- **{name}**");
+            }
+        }
+
+        this._aliasService.RemoveCache();
+
+        embed.WithDescription(description.ToString());
+        embed.WithColor(DiscordConstants.InformationColorBlue);
+        embed.WithFooter($"Adjusted by {this.Context.Interaction.User.Username}");
+        await RespondAsync(embed: embed.Build());
     }
 
-    [ModalInteraction(InteractionConstants.GlobalWhoKnowsReportModal)]
+    [ComponentInteraction(InteractionConstants.ModerationCommands.GlobalWhoKnowsReport)]
+    public async Task ReportGlobalWhoKnowsButton()
+    {
+        await this.Context.Interaction.RespondWithModalAsync<ReportGlobalWhoKnowsModal>(InteractionConstants.ModerationCommands.GlobalWhoKnowsReportModal);
+    }
+
+    [ModalInteraction(InteractionConstants.ModerationCommands.GlobalWhoKnowsReportModal)]
     public async Task ReportGlobalWhoKnowsButton(ReportGlobalWhoKnowsModal modal)
     {
         var positiveResponse = $"Thanks, your report for the user `{modal.UserNameLastFM}` has been received. \n" +
@@ -224,13 +282,56 @@ public class AdminSlashCommands : InteractionModuleBase
         await message.ModifyAsync(m => m.Components = components.Build());
     }
 
-    [ComponentInteraction(InteractionConstants.ReportAlbum)]
-    public async Task ReportAlbum()
+    [ComponentInteraction("gwk-filtered-user-to-ban-*")]
+    public async Task GwkReportBanConfirmed(string filteredUserId)
     {
-        await this.Context.Interaction.RespondWithModalAsync<ReportAlbumModal>(InteractionConstants.ReportAlbumModal);
+        if (!await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            return;
+        }
+
+        var id = int.Parse(filteredUserId);
+        var filteredUser = await this._adminService.GetFilteredUserForIdAsync(id);
+
+        var userInfo = await this._dataSourceFactory.GetLfmUserInfoAsync(filteredUser.UserNameLastFm);
+        DateTimeOffset? age = null;
+        if (userInfo != null && userInfo.Subscriber)
+        {
+            age = DateTimeOffset.FromUnixTimeSeconds(userInfo.RegisteredUnix);
+        }
+
+        var filterInfo = WhoKnowsFilterService.FilteredUserReason(filteredUser);
+
+        var result = await this._adminService.AddBottedUserAsync(filteredUser.UserNameLastFm, filterInfo.ToString(), age?.DateTime);
+
+        if (result)
+        {
+            await RespondAsync($"Converted filter for `{filteredUser.UserNameLastFm}` into gwk ban, thank you.", ephemeral: true);
+        }
+        else
+        {
+            await RespondAsync($"Something went wrong. Try checking again", ephemeral: true);
+        }
+
+        var message = (this.Context.Interaction as SocketMessageComponent)?.Message;
+
+        if (message == null)
+        {
+            return;
+        }
+
+        var components =
+            new ComponentBuilder().WithButton($"Converted to ban by {this.Context.Interaction.User.Username}", customId: "1", url: null, disabled: true, style: ButtonStyle.Success);
+        await message.ModifyAsync(m => m.Components = components.Build());
     }
 
-    [ModalInteraction(InteractionConstants.ReportAlbumModal)]
+    [ComponentInteraction(InteractionConstants.ModerationCommands.ReportAlbum)]
+    public async Task ReportAlbum()
+    {
+        await this.Context.Interaction.RespondWithModalAsync<ReportAlbumModal>(InteractionConstants.ModerationCommands.ReportAlbumModal);
+    }
+
+    [ModalInteraction(InteractionConstants.ModerationCommands.ReportAlbumModal)]
     public async Task ReportAlbumButton(ReportAlbumModal modal)
     {
         var existingCensor = await this._censorService.AlbumResult(modal.AlbumName, modal.ArtistName);
@@ -265,13 +366,13 @@ public class AdminSlashCommands : InteractionModuleBase
         await this._censorService.PostReport(report);
     }
 
-    [ComponentInteraction(InteractionConstants.ReportArtist)]
+    [ComponentInteraction(InteractionConstants.ModerationCommands.ReportArtist)]
     public async Task ReportArtist()
     {
-        await this.Context.Interaction.RespondWithModalAsync<ReportArtistModal>(InteractionConstants.ReportArtistModal);
+        await this.Context.Interaction.RespondWithModalAsync<ReportArtistModal>(InteractionConstants.ModerationCommands.ReportArtistModal);
     }
 
-    [ModalInteraction(InteractionConstants.ReportArtistModal)]
+    [ModalInteraction(InteractionConstants.ModerationCommands.ReportArtistModal)]
     public async Task ReportArtistButton(ReportArtistModal modal)
     {
         var existingCensor = await this._censorService.ArtistResult(modal.ArtistName);

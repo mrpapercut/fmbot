@@ -2,22 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
-using System.Text.Encodings.Web;
 using System.Threading.Tasks;
 using Dapper;
 using Discord;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Models;
-using FMBot.Bot.Resources;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
+using FMBot.Domain.Flags;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Domain.Types;
-using FMBot.LastFM.Domain.Types;
-using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using FMBot.Persistence.Repositories;
@@ -33,37 +30,34 @@ public class AlbumService
 {
     private readonly IMemoryCache _cache;
     private readonly BotSettings _botSettings;
-    private readonly AlbumRepository _albumRepository;
     private readonly IDataSourceFactory _dataSourceFactory;
     private readonly TimerService _timer;
     private readonly WhoKnowsAlbumService _whoKnowsAlbumService;
     private readonly IDbContextFactory<FMBotDbContext> _contextFactory;
-    private readonly ArtistsService _artistsService;
     private readonly IUpdateService _updateService;
+    private readonly AliasService _aliasService;
 
     public AlbumService(IMemoryCache cache,
         IOptions<BotSettings> botSettings,
-        AlbumRepository albumRepository,
         IDataSourceFactory dataSourceFactory,
         TimerService timer,
         WhoKnowsAlbumService whoKnowsAlbumService,
         IDbContextFactory<FMBotDbContext> contextFactory,
-        ArtistsService artistsService,
-        IUpdateService updateService)
+        IUpdateService updateService,
+        AliasService aliasService)
     {
         this._cache = cache;
-        this._albumRepository = albumRepository;
         this._dataSourceFactory = dataSourceFactory;
         this._timer = timer;
         this._whoKnowsAlbumService = whoKnowsAlbumService;
         this._contextFactory = contextFactory;
-        this._artistsService = artistsService;
         this._updateService = updateService;
+        this._aliasService = aliasService;
         this._botSettings = botSettings.Value;
     }
 
     public async Task<AlbumSearch> SearchAlbum(ResponseModel response, IUser discordUser, string albumValues, string lastFmUserName, string sessionKey = null,
-            string otherUserUsername = null, bool useCachedAlbums = false, int? userId = null)
+            string otherUserUsername = null, bool useCachedAlbums = false, int? userId = null, ulong? interactionId = null)
     {
         string searchValue;
         if (!string.IsNullOrWhiteSpace(albumValues) && albumValues.Length != 0)
@@ -113,6 +107,12 @@ public class AlbumService
                         lastFmUserName);
                 }
 
+                if (interactionId.HasValue)
+                {
+                    PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, searchArtistName);
+                    PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, searchAlbumName);
+                }
+
                 if (!albumInfo.Success && albumInfo.Error == ResponseStatus.MissingParameters)
                 {
                     response.Embed.WithDescription($"Album `{searchAlbumName}` by `{searchArtistName}` could not be found, please check your search values and try again.");
@@ -146,9 +146,8 @@ public class AlbumService
 
             if (GenericEmbedService.RecentScrobbleCallFailed(recentScrobbles))
             {
-                response.Embed = GenericEmbedService.RecentScrobbleCallFailedBuilder(recentScrobbles, lastFmUserName);
-                response.ResponseType = ResponseType.Embed;
-                return new AlbumSearch(null, response);
+                var errorResponse = GenericEmbedService.RecentScrobbleCallFailedResponse(recentScrobbles, lastFmUserName);
+                return new AlbumSearch(null, errorResponse);
             }
 
             if (otherUserUsername != null)
@@ -177,6 +176,12 @@ public class AlbumService
             {
                 albumInfo = await this._dataSourceFactory.GetAlbumInfoAsync(lastPlayedTrack.ArtistName, lastPlayedTrack.AlbumName,
                     lastFmUserName);
+            }
+
+            if (interactionId.HasValue)
+            {
+                PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, lastPlayedTrack.ArtistName);
+                PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, lastPlayedTrack.AlbumName);
             }
 
             if (albumInfo?.Content == null || !albumInfo.Success)
@@ -212,6 +217,12 @@ public class AlbumService
             {
                 albumInfo = await this._dataSourceFactory.GetAlbumInfoAsync(album.ArtistName, album.AlbumName,
                     lastFmUserName);
+            }
+
+            if (interactionId.HasValue)
+            {
+                PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, albumInfo.Content.ArtistName);
+                PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, albumInfo.Content.AlbumName);
             }
 
             return new AlbumSearch(albumInfo.Content, response);
@@ -311,7 +322,7 @@ public class AlbumService
 
     public static string CacheKeyForAlbumCover(string artist, string album)
     {
-        return $"album-spotify-cover-{artist.ToLower()}-{album.ToLower()}";
+        return $"ab-co-{album.ToLower()}-{artist.ToLower()}";
     }
 
     public async Task<Album> GetAlbumForId(int albumId)
@@ -328,7 +339,13 @@ public class AlbumService
             return null;
         }
 
-        var correctedArtistName = await this._artistsService.GetCorrectedArtistName(artistName);
+        var alias = await this._aliasService.GetAlias(artistName);
+
+        var correctedArtistName = artistName;
+        if (alias != null && !alias.Options.HasFlag(AliasOption.NoRedirectInLastfmCalls))
+        {
+            correctedArtistName = alias.ArtistName;
+        }
 
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
@@ -408,6 +425,7 @@ public class AlbumService
             var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, DateTime.UtcNow.AddDays(-2));
 
             var albums = plays
+                .Where(w => w.AlbumName != null)
                 .OrderByDescending(o => o.TimePlayed)
                 .Select(s => new AlbumAutoCompleteSearchModel(s.ArtistName, s.AlbumName))
                 .Distinct()
@@ -450,6 +468,7 @@ public class AlbumService
             var plays = await PlayRepository.GetUserPlaysWithinTimeRange(user.UserId, connection, DateTime.UtcNow.AddDays(-20));
 
             var albums = plays
+                .Where(w => w.AlbumName != null)
                 .GroupBy(g => new AlbumAutoCompleteSearchModel(g.ArtistName, g.AlbumName))
                 .OrderByDescending(o => o.Count())
                 .Select(s => s.Key)
@@ -475,9 +494,9 @@ public class AlbumService
             var cacheAvailable = this._cache.TryGetValue(cacheKey, out List<AlbumAutoCompleteSearchModel> albums);
             if (!cacheAvailable && cacheEnabled)
             {
-                const string sql = "SELECT * " +
+                const string sql = "SELECT name, artist_name, popularity " +
                                    "FROM public.albums " +
-                                   "WHERE popularity is not null AND popularity > 5 ";
+                                   "WHERE popularity IS NOT NULL AND name IS NOT NULL and artist_name IS NOT NULL AND popularity > 5 ";
 
                 DefaultTypeMap.MatchNamesWithUnderscores = true;
                 await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
@@ -492,13 +511,11 @@ public class AlbumService
                 this._cache.Set(cacheKey, albums, TimeSpan.FromHours(2));
             }
 
-            searchValue = searchValue.ToLower();
-
             var results = albums.Where(w =>
-                w.Name.ToLower().StartsWith(searchValue) ||
-                w.Artist.ToLower().StartsWith(searchValue) ||
-                w.Name.ToLower().Contains(searchValue) ||
-                w.Artist.ToLower().Contains(searchValue))
+                w.Name.StartsWith(searchValue, StringComparison.OrdinalIgnoreCase) ||
+                w.Artist.StartsWith(searchValue, StringComparison.OrdinalIgnoreCase) ||
+                w.Name.Contains(searchValue, StringComparison.OrdinalIgnoreCase) ||
+                w.Artist.Contains(searchValue, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(o => o.Popularity)
                 .ToList();
 

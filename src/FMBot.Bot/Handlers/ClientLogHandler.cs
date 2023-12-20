@@ -7,6 +7,7 @@ using Discord.WebSocket;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Services.Guild;
+using FMBot.Domain;
 using FMBot.Domain.Models;
 using Microsoft.Extensions.Caching.Memory;
 using Serilog;
@@ -46,12 +47,18 @@ public class ClientLogHandler
         this._client.ShardDisconnected += ShardDisconnectedEvent;
         this._client.ShardConnected += ShardConnectedEvent;
         this._client.JoinedGuild += ClientJoinedGuildEvent;
-        this._client.LeftGuild += ClientLeftGuild;
+        this._client.LeftGuild += ClientLeftGuildEvent;
     }
 
     private Task ClientJoinedGuildEvent(SocketGuild guild)
     {
-        Task.Run(async () => ClientJoinedGuild(guild));
+        _ = Task.Run(() => ClientJoinedGuild(guild));
+        return Task.CompletedTask;
+    }
+
+    private Task ClientLeftGuildEvent(SocketGuild guild)
+    {
+        _ = Task.Run(() => ClientLeftGuild(guild));
         return Task.CompletedTask;
     }
 
@@ -87,38 +94,46 @@ public class ClientLogHandler
 
     private Task ShardDisconnectedEvent(Exception exception, DiscordSocketClient shard)
     {
-        Task.Run(async () => ShardDisconnected(exception, shard));
+        _ = Task.Run(() => ShardDisconnected(exception, shard));
         return Task.CompletedTask;
     }
 
     private Task ShardLatencyEvent(int oldPing, int updatePing, DiscordSocketClient shard)
     {
-        Task.Run(async () => ShardLatencyUpdated(oldPing, updatePing, shard));
+        _ = Task.Run(() => ShardLatencyUpdated(oldPing, updatePing, shard));
         return Task.CompletedTask;
     }
 
     private Task ShardConnectedEvent(DiscordSocketClient shard)
     {
-        Task.Run(async () => ShardConnected(shard));
+        _ = Task.Run(() => ShardConnected(shard));
         return Task.CompletedTask;
     }
 
     private void ShardDisconnected(Exception exception, DiscordSocketClient shard)
     {
-        Log.Warning("ShardDisconnected: shard #{shardId} Disconnected",
-            shard.ShardId, exception);
+        Statistics.ShardDisConnected.Inc();
+
+        Statistics.ConnectedShards.Set(this._client.Shards.Count(w => w.ConnectionState == ConnectionState.Connected));
+
+        Log.Warning("ShardDisconnected: shard #{shardId} Disconnected", shard.ShardId, exception);
     }
 
     private void ShardConnected(DiscordSocketClient shard)
     {
-        Log.Information("ShardConnected: shard #{shardId} with {shardLatency} ms",
-            shard.ShardId, shard.Latency);
+        Statistics.ShardConnected.Inc();
+
+        Statistics.ConnectedShards.Set(this._client.Shards.Count(w => w.ConnectionState == ConnectionState.Connected));
+
+        Log.Information("ShardConnected: shard #{shardId} with {shardLatency} ms", shard.ShardId, shard.Latency);
     }
 
     private void ShardLatencyUpdated(int oldPing, int updatePing, DiscordSocketClient shard)
     {
-        // If new or old latency if lager then 500ms.
-        if (updatePing < 500 && oldPing < 500) return;
+        Statistics.ConnectedShards.Set(this._client.Shards.Count(w => w.ConnectionState == ConnectionState.Connected));
+
+        if (updatePing < 400 && oldPing < 400) return;
+
         Log.Information("Shard: #{shardId} Latency update from {oldPing} ms to {updatePing} ms",
             shard.ShardId, oldPing, updatePing);
     }

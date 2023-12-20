@@ -55,19 +55,50 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
     }
 
+    [ComponentInteraction($"{InteractionConstants.Album.Info}-*-*-*")]
+    [UsernameSetRequired]
+    public async Task AlbumAsync(string album, string discordUser, string requesterDiscordUser)
+    {
+        _ = DeferAsync();
+        await this.Context.DisableInteractionButtons();
+
+        var discordUserId = ulong.Parse(discordUser);
+        var requesterDiscordUserId = ulong.Parse(requesterDiscordUser);
+        var albumId = int.Parse(album);
+
+        var contextUser = await this._userService.GetUserWithDiscogs(requesterDiscordUserId);
+        var discordContextUser = await this.Context.Client.GetUserAsync(requesterDiscordUserId);
+        var userSettings = await this._settingService.GetOriginalContextUser(discordUserId, requesterDiscordUserId, this.Context.Guild, this.Context.User);
+
+        var dbAlbum = await this._albumService.GetAlbumForId(albumId);
+
+        try
+        {
+            var response = await this._albumBuilders.AlbumAsync(
+                new ContextModel(this.Context, contextUser, discordContextUser), $"{dbAlbum.ArtistName} | {dbAlbum.Name}", userSettings);
+
+            await this.Context.UpdateInteractionEmbed(response, this.Interactivity, false);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [SlashCommand("wkalbum", "Shows what other users listen to an album in your server")]
     [UsernameSetRequired]
     public async Task WhoKnowsAlbumAsync(
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))] string name = null,
-        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Mode", "The type of response you want - change default with /responsemode")] ResponseMode? mode = null,
         [Summary("Role-picker", "Display a rolepicker to filter with roles")] bool displayRoleFilter = false)
     {
         _ = DeferAsync();
 
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-        mode ??= contextUser.Mode ?? WhoKnowsMode.Embed;
+        mode ??= contextUser.Mode ?? ResponseMode.Embed;
 
         try
         {
@@ -103,7 +134,7 @@ public class AlbumSlashCommands : InteractionModuleBase
 
         try
         {
-            var response = await this._albumBuilders.WhoKnowsAlbumAsync(new ContextModel(this.Context, contextUser), WhoKnowsMode.Embed, $"{album.ArtistName} | {album.Name}", true, roleIds);
+            var response = await this._albumBuilders.WhoKnowsAlbumAsync(new ContextModel(this.Context, contextUser), ResponseMode.Embed, $"{album.ArtistName} | {album.Name}", true, roleIds);
 
             await this.Context.UpdateInteractionEmbed(response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -120,14 +151,14 @@ public class AlbumSlashCommands : InteractionModuleBase
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))]
         string name = null,
-        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Mode", "The type of response you want - change default with /responsemode")] ResponseMode? mode = null,
         [Summary("Private", "Only show response to you")] bool privateResponse = false)
     {
         _ = DeferAsync(privateResponse);
 
         var contextUser = await this._userService.GetUserWithFriendsAsync(this.Context.User);
 
-        mode ??= contextUser.Mode ?? WhoKnowsMode.Embed;
+        mode ??= contextUser.Mode ?? ResponseMode.Embed;
 
         try
         {
@@ -148,7 +179,7 @@ public class AlbumSlashCommands : InteractionModuleBase
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))]
         string name = null,
-        [Summary("Mode", "The type of response you want")] WhoKnowsMode? mode = null,
+        [Summary("Mode", "The type of response you want - change default with /responsemode")] ResponseMode? mode = null,
         [Summary("Hide-private", "Hide or show private users")] bool hidePrivate = false)
     {
         _ = DeferAsync();
@@ -161,7 +192,7 @@ public class AlbumSlashCommands : InteractionModuleBase
             ShowBotters = false,
             AdminView = false,
             NewSearchValue = name,
-            WhoKnowsMode = mode ?? contextUser.Mode ?? WhoKnowsMode.Embed
+            ResponseMode = mode ?? contextUser.Mode ?? ResponseMode.Embed
         };
 
         try
@@ -186,12 +217,43 @@ public class AlbumSlashCommands : InteractionModuleBase
         _ = DeferAsync();
 
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var userSettings = await this._settingService.GetUser(null, contextUser, this.Context.Guild, this.Context.User, true);
 
         try
         {
-            var response = await this._albumBuilders.CoverAsync(new ContextModel(this.Context, contextUser), name);
+            var response = await this._albumBuilders.CoverAsync(new ContextModel(this.Context, contextUser), userSettings, name);
 
             await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [ComponentInteraction($"{InteractionConstants.Album.Cover}-*-*-*")]
+    [UsernameSetRequired]
+    public async Task AlbumCoverAsync(string album, string discordUser, string requesterDiscordUser)
+    {
+        _ = DeferAsync();
+        await this.Context.DisableInteractionButtons();
+
+        var discordUserId = ulong.Parse(discordUser);
+        var requesterDiscordUserId = ulong.Parse(requesterDiscordUser);
+        var albumId = int.Parse(album);
+
+        var contextUser = await this._userService.GetUserWithDiscogs(requesterDiscordUserId);
+        var discordContextUser = await this.Context.Client.GetUserAsync(requesterDiscordUserId);
+        var userSettings = await this._settingService.GetOriginalContextUser(discordUserId, requesterDiscordUserId, this.Context.Guild, this.Context.User);
+
+        var dbAlbum = await this._albumService.GetAlbumForId(albumId);
+
+        try
+        {
+            var response = await this._albumBuilders.CoverAsync(new ContextModel(this.Context, contextUser, discordContextUser), userSettings, $"{dbAlbum.ArtistName} | {dbAlbum.Name}");
+
+            await this.Context.UpdateInteractionEmbed(response, this.Interactivity, false);
             this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
@@ -217,6 +279,37 @@ public class AlbumSlashCommands : InteractionModuleBase
             var response = await this._albumBuilders.AlbumTracksAsync(new ContextModel(this.Context, contextUser), userSettings, name);
 
             await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [ComponentInteraction($"{InteractionConstants.Album.Tracks}-*-*-*")]
+    [UsernameSetRequired]
+    public async Task AlbumTracksAsync(string album, string discordUser, string requesterDiscordUser)
+    {
+        _ = DeferAsync();
+        await this.Context.DisableInteractionButtons();
+
+        var discordUserId = ulong.Parse(discordUser);
+        var requesterDiscordUserId = ulong.Parse(requesterDiscordUser);
+        var albumId = int.Parse(album);
+
+        var contextUser = await this._userService.GetUserWithDiscogs(requesterDiscordUserId);
+        var discordContextUser = await this.Context.Client.GetUserAsync(requesterDiscordUserId);
+        var userSettings = await this._settingService.GetOriginalContextUser(discordUserId, requesterDiscordUserId, this.Context.Guild, this.Context.User);
+
+        var dbAlbum = await this._albumService.GetAlbumForId(albumId);
+
+        try
+        {
+            var response = await this._albumBuilders.AlbumTracksAsync(
+                new ContextModel(this.Context, contextUser, discordContextUser), userSettings, $"{dbAlbum.ArtistName} | {dbAlbum.Name}");
+
+            await this.Context.UpdateInteractionEmbed(response, this.Interactivity, false);
             this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)

@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices.ComTypes;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
 using Fergun.Interactive;
 using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
+using FMBot.Domain;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Models;
 using Serilog;
@@ -23,9 +22,25 @@ public static class InteractionContextExtensions
         {
             commandName = socketSlashCommand.CommandName;
         }
+        if (context.Interaction is SocketMessageComponent socketMessageComponent)
+        {
+            var customId = socketMessageComponent.Data?.CustomId;
+
+            if (customId != null)
+            {
+                var parts = customId.Split('-');
+
+                if (parts.Length >= 2)
+                {
+                    commandName = parts[0] + '-' + parts[1];
+                }
+            }
+        }
 
         Log.Information("SlashCommandUsed: {discordUserName} / {discordUserId} | {guildName} / {guildId} | {commandResponse} | {messageContent}",
             context.User?.Username, context.User?.Id, context.Guild?.Name, context.Guild?.Id, commandResponse, commandName);
+
+        PublicProperties.UsedCommandsResponses.TryAdd(context.Interaction.Id, commandResponse);
     }
 
     public static async Task HandleCommandException(this IInteractionContext context, Exception exception, string message = null, bool sendReply = true, bool deferFirst = false)
@@ -53,6 +68,8 @@ public static class InteractionContextExtensions
             await context.Interaction.FollowupAsync($"Sorry, something went wrong while trying to process `{commandName}`. Please try again later.\n" +
                                                     $"*Reference id: `{referenceId}`*", ephemeral: true);
         }
+
+        PublicProperties.UsedCommandsErrorReferences.TryAdd(context.Interaction.Id, referenceId);
     }
 
     public static void LogCommandWithLastFmError(this IInteractionContext context, ResponseStatus? responseStatus)
@@ -65,6 +82,8 @@ public static class InteractionContextExtensions
 
         Log.Error("SlashCommandUsed: {discordUserName} / {discordUserId} | {guildName} / {guildId} | {commandResponse} | {messageContent} | Last.fm error: {responseStatus}",
             context.User?.Username, context.User?.Id, context.Guild?.Name, context.Guild?.Id, CommandResponse.LastFmError, commandName);
+
+        PublicProperties.UsedCommandsResponses.TryAdd(context.Interaction.Id, CommandResponse.LastFmError);
     }
 
     public static async Task SendResponse(this IInteractionContext context, InteractiveService interactiveService, ResponseModel response, bool ephemeral = false)
@@ -83,6 +102,9 @@ public static class InteractionContextExtensions
                     (SocketInteraction)context.Interaction,
                     TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds),
                     ephemeral: ephemeral);
+                break;
+            case ResponseType.SupporterRequired:
+                await context.Interaction.RespondWithPremiumRequiredAsync();
                 break;
             default:
                 throw new ArgumentOutOfRangeException();
@@ -138,7 +160,7 @@ public static class InteractionContextExtensions
         }
     }
 
-    public static async Task UpdateInteractionEmbed(this IInteractionContext context, ResponseModel response, InteractiveService interactiveService = null)
+    public static async Task UpdateInteractionEmbed(this IInteractionContext context, ResponseModel response, InteractiveService interactiveService = null, bool defer = true)
     {
         var message = (context.Interaction as SocketMessageComponent)?.Message;
 
@@ -153,7 +175,32 @@ public static class InteractionContextExtensions
             return;
         }
 
-        await context.ModifyMessage(message, response);
+        await context.ModifyMessage(message, response, defer);
+    }
+
+    public static async Task DisableInteractionButtons(this IInteractionContext context)
+    {
+        var message = (context.Interaction as SocketMessageComponent)?.Message;
+
+        if (message == null)
+        {
+            return;
+        }
+
+        var newComponents = new ComponentBuilder();
+        foreach (var actionRowComponent in message.Components)
+        {
+            foreach (var component in actionRowComponent.Components)
+            {
+                if (component is ButtonComponent buttonComponent)
+                {
+                    newComponents.WithButton(buttonComponent.Label, buttonComponent.CustomId, buttonComponent.Style,
+                        buttonComponent.Emote, buttonComponent.Url, true);
+                }
+            }
+        }
+
+        await message.ModifyAsync(m => m.Components = newComponents.Build());
     }
 
     public static async Task UpdateMessageEmbed(this IInteractionContext context, ResponseModel response, string messageId)
@@ -169,15 +216,23 @@ public static class InteractionContextExtensions
         await context.ModifyMessage(message, response);
     }
 
-    private static async Task ModifyMessage(this IInteractionContext context, IUserMessage message, ResponseModel response)
+    private static async Task ModifyMessage(this IInteractionContext context, IUserMessage message,
+        ResponseModel response, bool defer = true)
     {
         await message.ModifyAsync(m =>
         {
             m.Components = response.Components?.Build();
-            m.Embed = response.Embed.Build();
+            m.Embed = response.Embed?.Build();
+            m.Attachments = response.Stream != null ? new Optional<IEnumerable<FileAttachment>>(new List<FileAttachment>
+            {
+                new(response.Stream, "image.png")
+            }) : null;
         });
 
-        await context.Interaction.DeferAsync();
+        if (defer)
+        {
+            await context.Interaction.DeferAsync();
+        }
     }
 
     private static async Task ModifyPaginator(this IInteractionContext context, InteractiveService interactiveService, IUserMessage message, ResponseModel response)

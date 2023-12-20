@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -17,11 +16,10 @@ using FMBot.Bot.Services.ThirdParty;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
 using FMBot.Domain.Enums;
+using FMBot.Domain.Flags;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Domain.Types;
-using FMBot.LastFM.Domain.Types;
-using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using FMBot.Persistence.Repositories;
@@ -41,44 +39,41 @@ public class TrackService
     private readonly HttpClient _client;
     private readonly BotSettings _botSettings;
     private readonly IMemoryCache _cache;
-    private readonly TrackRepository _trackRepository;
     private readonly IDbContextFactory<FMBotDbContext> _contextFactory;
     private readonly TimerService _timer;
     private readonly AlbumService _albumService;
     private readonly WhoKnowsTrackService _whoKnowsTrackService;
-    private readonly ArtistsService _artistsService;
     private readonly IUpdateService _updateService;
+    private readonly AliasService _aliasService;
 
     public TrackService(HttpClient httpClient,
         IDataSourceFactory dataSourceFactory,
         IOptions<BotSettings> botSettings,
         SpotifyService spotifyService,
         IMemoryCache memoryCache,
-        TrackRepository trackRepository,
         IDbContextFactory<FMBotDbContext> contextFactory,
         TimerService timer,
         AlbumService albumService,
         WhoKnowsTrackService whoKnowsTrackService,
-        ArtistsService artistsService,
-        IUpdateService updateService)
+        IUpdateService updateService,
+        AliasService aliasService)
     {
         this._dataSourceFactory = dataSourceFactory;
         this._spotifyService = spotifyService;
         this._cache = memoryCache;
-        this._trackRepository = trackRepository;
         this._client = httpClient;
         this._botSettings = botSettings.Value;
         this._contextFactory = contextFactory;
         this._timer = timer;
         this._albumService = albumService;
         this._whoKnowsTrackService = whoKnowsTrackService;
-        this._artistsService = artistsService;
         this._updateService = updateService;
+        this._aliasService = aliasService;
     }
 
     public async Task<TrackSearch> SearchTrack(ResponseModel response, IUser discordUser, string trackValues,
-        string lastFmUserName, string sessionKey = null,
-        string otherUserUsername = null, bool useCachedTracks = false, int? userId = null)
+        string lastFmUserName, string sessionKey = null, string otherUserUsername = null, bool useCachedTracks = false,
+        int? userId = null, ulong? interactionId = null)
     {
         string searchValue;
         if (!string.IsNullOrWhiteSpace(trackValues) && trackValues.Length != 0)
@@ -110,6 +105,16 @@ public class TrackService
                 {
                     trackInfo = await this._dataSourceFactory.GetTrackInfoAsync(trackName, trackArtist,
                         lastFmUserName);
+                }
+
+                if (interactionId.HasValue)
+                {
+                    PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, trackArtist);
+                    PublicProperties.UsedCommandsTracks.TryAdd(interactionId.Value, trackName);
+                    if (!string.IsNullOrWhiteSpace(trackInfo.Content?.AlbumName))
+                    {
+                        PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, trackInfo.Content.AlbumName);
+                    }
                 }
 
                 if (!trackInfo.Success && trackInfo.Error == ResponseStatus.MissingParameters)
@@ -146,10 +151,8 @@ public class TrackService
 
             if (GenericEmbedService.RecentScrobbleCallFailed(recentScrobbles))
             {
-                response.Embed =
-                    GenericEmbedService.RecentScrobbleCallFailedBuilder(recentScrobbles, lastFmUserName);
-                response.ResponseType = ResponseType.Embed;
-                return new TrackSearch(null, response);
+                var errorResponse = GenericEmbedService.RecentScrobbleCallFailedResponse(recentScrobbles, lastFmUserName);
+                return new TrackSearch(null, errorResponse);
             }
 
             if (otherUserUsername != null)
@@ -168,6 +171,16 @@ public class TrackService
             {
                 trackInfo = await this._dataSourceFactory.GetTrackInfoAsync(lastPlayedTrack.TrackName, lastPlayedTrack.ArtistName,
                     lastFmUserName);
+            }
+
+            if (interactionId.HasValue)
+            {
+                PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, lastPlayedTrack.ArtistName);
+                PublicProperties.UsedCommandsTracks.TryAdd(interactionId.Value, lastPlayedTrack.TrackName);
+                if (!string.IsNullOrWhiteSpace(lastPlayedTrack.AlbumName))
+                {
+                    PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, lastPlayedTrack.AlbumName);
+                }
             }
 
             if (trackInfo?.Content == null || !trackInfo.Success)
@@ -212,6 +225,16 @@ public class TrackService
                 response.CommandResponse = CommandResponse.NotFound;
                 response.ResponseType = ResponseType.Embed;
                 return new TrackSearch(null, response);
+            }
+
+            if (interactionId.HasValue)
+            {
+                PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, result.Content.ArtistName);
+                PublicProperties.UsedCommandsTracks.TryAdd(interactionId.Value, result.Content.TrackName);
+                if (!string.IsNullOrWhiteSpace(trackInfo.Content?.AlbumName))
+                {
+                    PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, trackInfo.Content.AlbumName);
+                }
             }
 
             return new TrackSearch(trackInfo.Content, response);
@@ -641,7 +664,13 @@ public class TrackService
             return null;
         }
 
-        var correctedArtistName = await this._artistsService.GetCorrectedArtistName(artistName);
+        var alias = await this._aliasService.GetAlias(artistName);
+
+        var correctedArtistName = artistName;
+        if (alias != null && !alias.Options.HasFlag(AliasOption.NoRedirectInLastfmCalls))
+        {
+            correctedArtistName = alias.ArtistName;
+        }
 
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
@@ -758,7 +787,7 @@ public class TrackService
             var cacheAvailable = this._cache.TryGetValue(cacheKey, out List<TrackAutoCompleteSearchModel> tracks);
             if (!cacheAvailable && cacheEnabled)
             {
-                const string sql = "SELECT * " +
+                const string sql = "SELECT name, artist_name, popularity " +
                                    "FROM public.tracks " +
                                    "WHERE popularity is not null AND popularity > 5 ";
 
@@ -775,13 +804,11 @@ public class TrackService
                 this._cache.Set(cacheKey, tracks, TimeSpan.FromHours(2));
             }
 
-            searchValue = searchValue.ToLower();
-
             var results = tracks.Where(w =>
-                    w.Name.ToLower().StartsWith(searchValue) ||
-                    w.Artist.ToLower().StartsWith(searchValue) ||
-                    w.Name.ToLower().Contains(searchValue) ||
-                    w.Artist.ToLower().Contains(searchValue))
+                    w.Name.StartsWith(searchValue, StringComparison.OrdinalIgnoreCase) ||
+                    w.Artist.StartsWith(searchValue, StringComparison.OrdinalIgnoreCase) ||
+                    w.Name.Contains(searchValue, StringComparison.OrdinalIgnoreCase) ||
+                    w.Artist.Contains(searchValue, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(o => o.Popularity)
                 .ToList();
 

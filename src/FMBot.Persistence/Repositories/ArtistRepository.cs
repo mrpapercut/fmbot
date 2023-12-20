@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -23,7 +24,7 @@ public class ArtistRepository
     public static async Task<ulong> AddOrReplaceUserArtistsInDatabase(IReadOnlyList<UserArtist> artists, int userId,
         NpgsqlConnection connection)
     {
-        Log.Information($"Inserting {artists.Count} artists for user {userId}");
+        Log.Information("Index: {userId} - Inserting {albumCount} top artists", userId, artists.Count);
 
         var copyHelper = new PostgreSQLCopyHelper<UserArtist>("public", "user_artists")
             .MapText("name", x => x.Name)
@@ -36,7 +37,7 @@ public class ArtistRepository
         return await copyHelper.SaveAllAsync(connection, artists);
     }
 
-    public async Task<Artist> GetArtistForName(string artistName, NpgsqlConnection connection, bool includeGenres = false)
+    public static async Task<Artist> GetArtistForName(string artistName, NpgsqlConnection connection, bool includeGenres = false, bool includeLinks = false)
     {
         const string getArtistQuery = "SELECT * FROM public.artists " +
                                       "WHERE UPPER(name) = UPPER(CAST(@artistName AS CITEXT))";
@@ -52,10 +53,15 @@ public class ArtistRepository
             artist.ArtistGenres = await GetArtistGenres(artist.Id, connection);
         }
 
+        if (includeLinks && artist != null)
+        {
+            artist.ArtistLinks = await GetArtistLinks(artist.Id, connection);
+        }
+
         return artist;
     }
 
-    private async Task<ICollection<ArtistGenre>> GetArtistGenres(int artistId, NpgsqlConnection connection)
+    private static async Task<ICollection<ArtistGenre>> GetArtistGenres(int artistId, NpgsqlConnection connection)
     {
         const string getArtistGenreQuery = "SELECT * FROM public.artist_genres " +
                                            "WHERE artist_id = @artistId";
@@ -67,27 +73,49 @@ public class ArtistRepository
         })).ToList();
     }
 
-    public async Task AddOrUpdateArtistAlias(int artistId, string artistNameBeforeCorrect, NpgsqlConnection connection)
+    private static async Task<ICollection<ArtistLink>> GetArtistLinks(int artistId, NpgsqlConnection connection)
     {
-        const string deleteQuery = @"DELETE FROM public.artist_aliases WHERE artist_id = @artistId AND alias = @alias";
-        await connection.ExecuteAsync(deleteQuery, new
-        {
-            artistId,
-            alias = artistNameBeforeCorrect
-        });
+        const string getArtistLinkQuery = "SELECT * FROM public.artist_links " +
+                                           "WHERE artist_id = @artistId";
 
-        const string insertQuery = @"INSERT INTO public.artist_aliases(artist_id, alias, corrects_in_scrobbles) " +
-                                   "VALUES (@artistId, @alias, @correctsInScrobbles)";
-
-        await connection.ExecuteAsync(insertQuery, new
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        return (await connection.QueryAsync<ArtistLink>(getArtistLinkQuery, new
         {
-            artistId,
-            alias = artistNameBeforeCorrect,
-            correctsInScrobbles = true
-        });
+            artistId
+        })).ToList();
     }
 
-    public async Task AddOrUpdateArtistGenres(int artistId, IEnumerable<string> genreNames, NpgsqlConnection connection)
+    public static async Task AddOrUpdateArtistAlias(int artistId, string artistNameBeforeCorrect, NpgsqlConnection connection)
+    {
+        if (string.Equals(artistNameBeforeCorrect, "rnd", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(artistNameBeforeCorrect, "random", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(artistNameBeforeCorrect, "featured", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        const string selectQuery = @"SELECT * FROM public.artist_aliases WHERE artist_id = @artistId AND alias = @alias LIMIT 1";
+        var result = await connection.QueryFirstOrDefaultAsync<ArtistAlias>(selectQuery, new
+        {
+            artistId,
+            alias = artistNameBeforeCorrect.ToLower()
+        });
+
+        if (result == null)
+        {
+            const string insertQuery = @"INSERT INTO public.artist_aliases(artist_id, alias, corrects_in_scrobbles) " +
+                                       "VALUES (@artistId, @alias, @correctsInScrobbles)";
+
+            await connection.ExecuteAsync(insertQuery, new
+            {
+                artistId,
+                alias = artistNameBeforeCorrect.ToLower(),
+                correctsInScrobbles = true
+            });
+        }
+    }
+
+    public static async Task AddOrUpdateArtistGenres(int artistId, IEnumerable<string> genreNames, NpgsqlConnection connection)
     {
         const string deleteQuery = @"DELETE FROM public.artist_genres WHERE artist_id = @artistId";
         await connection.ExecuteAsync(deleteQuery, new { artistId });
@@ -103,6 +131,36 @@ public class ArtistRepository
                 name = genreName
             });
         }
+    }
+
+    public static async Task AddOrUpdateArtistLinks(int artistId, IEnumerable<ArtistLink> links, NpgsqlConnection connection)
+    {
+        try
+        {
+            const string deleteQuery = @"DELETE FROM public.artist_links WHERE artist_id = @artistId AND manually_added = false";
+            await connection.ExecuteAsync(deleteQuery, new { artistId });
+
+            const string insertQuery = @"INSERT INTO public.artist_links(artist_id, url, username, type, manually_added) " +
+                                       "VALUES (@artistId, @url, @username, @type, @manuallyAdded)";
+
+            foreach (var link in links)
+            {
+                await connection.ExecuteAsync(insertQuery, new
+                {
+                    artistId = link.ArtistId,
+                    url = link.Url,
+                    username = link.Username,
+                    type = link.Type,
+                    manuallyAdded = link.ManuallyAdded
+                });
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
+        }
+        
     }
 
     public static async Task<IReadOnlyCollection<UserArtist>> GetUserArtists(int userId, NpgsqlConnection connection)

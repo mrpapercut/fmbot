@@ -33,12 +33,11 @@ using Serilog.Events;
 using Serilog.Exceptions;
 using RunMode = Discord.Commands.RunMode;
 using Hangfire;
-using Hangfire.MemoryStorage;
 using FMBot.Domain.Interfaces;
-using System.Collections.Generic;
 using FMBot.Bot.Factories;
 using FMBot.Domain.Enums;
 using FMBot.Persistence.Interfaces;
+using System.Linq;
 
 namespace FMBot.Bot;
 
@@ -79,6 +78,8 @@ public class Startup
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Is(logLevel)
             .Enrich.WithExceptionDetails()
+            .Enrich.WithEnvironmentVariable("INSTANCE_NAME")
+            .Enrich.WithMachineName()
             .Enrich.WithProperty("Environment", !string.IsNullOrEmpty(this.Configuration.GetSection("Environment")?.Value) ? this.Configuration.GetSection("Environment").Value : "unknown")
             .Enrich.WithProperty("BotUserId", botUserId)
             .WriteTo.Console(consoleLevel)
@@ -111,15 +112,39 @@ public class Startup
     {
         services.Configure<BotSettings>(this.Configuration);
 
-        var discordClient = new DiscordShardedClient(new DiscordSocketConfig
+        var config = new DiscordSocketConfig
         {
             LogLevel = LogSeverity.Info,
             MessageCacheSize = 0,
-            ConnectionTimeout = 240000,
             GatewayIntents = GatewayIntents.GuildMembers | GatewayIntents.MessageContent |
                              GatewayIntents.DirectMessages | GatewayIntents.GuildMessages | GatewayIntents.Guilds |
-                             GatewayIntents.GuildVoiceStates
-        });
+                             GatewayIntents.GuildVoiceStates,
+            TotalShards = ConfigData.Data.Shards?.TotalShards != null ? ConfigData.Data.Shards.TotalShards : null,
+            ConnectionTimeout = 60000
+        };
+
+        DiscordShardedClient discordClient;
+
+        if (ConfigData.Data.Shards != null && ConfigData.Data.Shards.StartShard.HasValue && ConfigData.Data.Shards.EndShard.HasValue)
+        {
+            var startShard = ConfigData.Data.Shards.StartShard.Value;
+            var endShard = ConfigData.Data.Shards.EndShard.Value;
+
+            var arrayLength = endShard - startShard + 1;
+
+            var shards = Enumerable.Range(startShard, arrayLength).ToArray();
+
+            Log.Warning("Initializing Discord sharded client with {totalShards} total shards, starting at shard {startingShard} til {endingShard} - {shards}",
+                ConfigData.Data.Shards.TotalShards, startShard, endShard, shards);
+
+            discordClient = new DiscordShardedClient(shards, config);
+        }
+        else
+        {
+            Log.Warning("Initializing normal Discord sharded client");
+
+            discordClient = new DiscordShardedClient(config);
+        }
 
         services
             .AddSingleton(discordClient)
@@ -131,6 +156,7 @@ public class Startup
             .AddSingleton<InteractionService>()
             .AddSingleton<AlbumService>()
             .AddSingleton<AlbumBuilders>()
+            .AddSingleton<AliasService>()
             .AddSingleton<ArtistBuilders>()
             .AddSingleton<AlbumRepository>()
             .AddSingleton<AdminService>()
@@ -152,6 +178,7 @@ public class Startup
             .AddSingleton<GeniusService>()
             .AddSingleton<GenreBuilders>()
             .AddSingleton<GenreService>()
+            .AddSingleton<GuildBuilders>()
             .AddSingleton<GuildService>()
             .AddSingleton<GuildSettingBuilder>()
             .AddSingleton<GuildDisabledCommandService>()
@@ -159,6 +186,7 @@ public class Startup
             .AddSingleton<DisabledChannelService>()
             .AddSingleton<IIndexService, IndexService>()
             .AddSingleton<IPrefixService, PrefixService>()
+            .AddSingleton<ImportBuilders>()
             .AddSingleton<InteractiveService>()
             .AddSingleton<IUserIndexQueue, UserIndexQueue>()
             .AddSingleton<IUserUpdateQueue, UserUpdateQueue>()
@@ -184,6 +212,7 @@ public class Startup
             .AddSingleton<WhoKnowsAlbumService>()
             .AddSingleton<WhoKnowsArtistService>()
             .AddSingleton<WhoKnowsPlayService>()
+            .AddSingleton<WhoKnowsFilterService>()
             .AddSingleton<WhoKnowsTrackService>()
             .AddSingleton<YoutubeService>()
             .AddSingleton<IUpdateService, UpdateService>()

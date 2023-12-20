@@ -45,7 +45,6 @@ public class StartupService
     private readonly UserService _userService;
     private readonly TimerService _timerService;
 
-
     public StartupService(
         IServiceProvider provider,
         DiscordShardedClient discord,
@@ -138,24 +137,23 @@ public class StartupService
                 Assembly.GetEntryAssembly(),
                 this._provider);
 
-        var shardTimeOut = 800;
-        foreach (var shard in this._client.Shards)
-        {
-            Log.Information("ShardStartConnection: shard {shardId} - timeout {shardTimeout}", shard.ShardId, shardTimeOut);
-            await shard.StartAsync();
-            await Task.Delay(shardTimeOut);
-            shardTimeOut += 4;
-
-            if (shardTimeOut > 1250)
-            {
-                shardTimeOut = 1250;
-            }
-        }
-
         Log.Information("Preparing cache folder");
         PrepareCacheFolder();
 
+        foreach (var shard in this._client.Shards)
+        { 
+            Log.Information("ShardConnectionStart: shard #{shardId}", shard.ShardId);
+            await shard.StartAsync();
+
+            while (shard.ConnectionState != ConnectionState.Connected)
+            {
+                await Task.Delay(100);
+            }
+
+        }
+
         await this._timerService.UpdateMetricsAndStatus();
+        await this._timerService.UpdateHealthCheck();
 
         InitializeHangfireConfig();
         this._timerService.QueueJobs();
@@ -164,10 +162,13 @@ public class StartupService
 
         var startDelay = (this._client.Shards.Count * 1) + 10;
 
-        BackgroundJob.Schedule(() => this.RegisterSlashCommands(), TimeSpan.FromSeconds(startDelay));
-        BackgroundJob.Schedule(() => this.CacheSlashCommandIds(), TimeSpan.FromSeconds(startDelay));
+        if (ConfigData.Data.Shards == null || ConfigData.Data.Shards.MainInstance == true)
+        {
+            BackgroundJob.Schedule(() => this.RegisterSlashCommands(), TimeSpan.FromSeconds(startDelay));
+            BackgroundJob.Schedule(() => this.StartBotSiteUpdater(), TimeSpan.FromMinutes(15));
+        }
 
-        BackgroundJob.Schedule(() => this.StartBotSiteUpdater(), TimeSpan.FromMinutes(15));
+        BackgroundJob.Schedule(() => this.CacheSlashCommandIds(), TimeSpan.FromSeconds(startDelay));
 
         await this.CachePremiumGuilds();
         await this.CacheDiscordUserIds();
@@ -215,11 +216,21 @@ public class StartupService
         }
 
         Log.Information("Starting metrics pusher");
-        var pusher = new MetricPusher(new MetricPusherOptions
+        var options = new MetricPusherOptions
         {
             Endpoint = this._botSettings.Bot.MetricsPusherEndpoint,
-            Job = this._botSettings.Bot.MetricsPusherName
-        });
+            Job = this._botSettings.Bot.MetricsPusherName,
+        };
+
+        if (!string.IsNullOrWhiteSpace(ConfigData.Data.Shards?.InstanceName))
+        {
+            options.AdditionalLabels= new List<Tuple<string, string>>()
+            {
+                new("instance", ConfigData.Data.Shards.InstanceName)
+            };
+        }
+
+        var pusher = new MetricPusher(options);
 
         pusher.Start();
 

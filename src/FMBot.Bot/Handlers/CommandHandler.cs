@@ -16,6 +16,7 @@ using FMBot.Domain;
 using FMBot.Domain.Models;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
+using Prometheus;
 using Serilog;
 
 namespace FMBot.Bot.Handlers;
@@ -32,6 +33,7 @@ public class CommandHandler
     private readonly IServiceProvider _provider;
     private readonly BotSettings _botSettings;
     private readonly IMemoryCache _cache;
+    private readonly IIndexService _indexService;
 
     // DiscordSocketClient, CommandService, IConfigurationRoot, and IServiceProvider are injected automatically from the IServiceProvider
     public CommandHandler(
@@ -44,7 +46,8 @@ public class CommandHandler
         IOptions<BotSettings> botSettings,
         GuildService guildService,
         InteractiveService interactiveService,
-        IMemoryCache cache)
+        IMemoryCache cache,
+        IIndexService indexService)
     {
         this._discord = discord;
         this._commands = commands;
@@ -55,25 +58,26 @@ public class CommandHandler
         this._guildService = guildService;
         this._interactiveService = interactiveService;
         this._cache = cache;
+        this._indexService = indexService;
         this._botSettings = botSettings.Value;
-        this._discord.MessageReceived += OnMessageReceivedAsync;
-        this._discord.MessageUpdated += OnMessageUpdatedAsync;
+        this._discord.MessageReceived += MessageReceived;
+        this._discord.MessageUpdated += MessageUpdated;
     }
 
-    private async Task OnMessageReceivedAsync(SocketMessage s)
+    private async Task MessageReceived(SocketMessage s)
     {
-        var msg = s as SocketUserMessage; // Ensure the message is from a user/bot
-        if (msg == null)
+        Statistics.DiscordEvents.WithLabels(nameof(MessageReceived)).Inc();
+
+        if (s is not SocketUserMessage msg)
         {
             return;
         }
 
         if (this._discord?.CurrentUser != null && msg.Author?.Id == this._discord.CurrentUser?.Id)
         {
-            return; // Ignore self when checking commands
+            return;
         }
 
-        // Create the command context
         var context = new ShardedCommandContext(this._discord, msg);
 
         if (msg.Author != null && msg.Author.IsBot && msg.Flags != MessageFlags.Loading)
@@ -82,7 +86,8 @@ public class CommandHandler
             {
                 return;
             }
-            TryScrobbling(msg, context);
+
+            _ = Task.Run(() => TryScrobbling(msg, context));
             return;
         }
 
@@ -98,15 +103,16 @@ public class CommandHandler
 
         // New prefix '.' but user still uses the '.fm' prefix anyway
         if (prfx == this._botSettings.Bot.Prefix &&
-            msg.HasStringPrefix(prfx + "fm", ref argPos, StringComparison.CurrentCultureIgnoreCase) &&
+            msg.HasStringPrefix(prfx + "fm", ref argPos, StringComparison.OrdinalIgnoreCase) &&
             msg.Content.Length > $"{prfx}fm".Length)
         {
-            await ExecuteCommand(msg, context, argPos, prfx);
+            _ = Task.Run(() => ExecuteCommand(msg, context, argPos, prfx));
             return;
         }
 
         // Prefix is set to '.fm' and the user uses '.fm'
-        if (prfx == ".fm" && msg.HasStringPrefix(".", ref argPos))
+        const string fm = ".fm";
+        if (prfx == fm && msg.HasStringPrefix(".", ref argPos, StringComparison.OrdinalIgnoreCase))
         {
             var searchResult = this._commands.Search(context, argPos);
             if (searchResult.IsSuccess &&
@@ -114,27 +120,27 @@ public class CommandHandler
                 searchResult.Commands.Any() &&
                 searchResult.Commands.FirstOrDefault().Command.Name == "fm")
             {
-                await ExecuteCommand(msg, context, argPos, prfx);
+                _ = Task.Run(() => ExecuteCommand(msg, context, argPos, prfx));
                 return;
             }
         }
 
         // Normal or custom prefix
-        if (msg.HasStringPrefix(prfx, ref argPos, StringComparison.CurrentCultureIgnoreCase))
+        if (msg.HasStringPrefix(prfx, ref argPos, StringComparison.OrdinalIgnoreCase))
         {
-            await ExecuteCommand(msg, context, argPos, prfx);
+            _ = Task.Run(() => ExecuteCommand(msg, context, argPos, prfx));
             return;
         }
 
         // Mention
         if (this._discord != null && msg.HasMentionPrefix(this._discord.CurrentUser, ref argPos))
         {
-            await ExecuteCommand(msg, context, argPos, prfx);
+            _ = Task.Run(() => ExecuteCommand(msg, context, argPos, prfx));
             return;
         }
     }
 
-    private async void TryScrobbling(SocketUserMessage msg, ICommandContext context)
+    private async Task TryScrobbling(SocketUserMessage msg, ICommandContext context)
     {
         foreach (var musicBot in MusicBot.SupportedBots)
         {
@@ -146,8 +152,10 @@ public class CommandHandler
         }
     }
 
-    private async Task OnMessageUpdatedAsync(Cacheable<IMessage, ulong> originalMessage, SocketMessage updatedMessage, ISocketMessageChannel sourceChannel)
+    private async Task MessageUpdated(Cacheable<IMessage, ulong> originalMessage, SocketMessage updatedMessage, ISocketMessageChannel sourceChannel)
     {
+        Statistics.DiscordEvents.WithLabels(nameof(MessageUpdated)).Inc();
+
         var msg = updatedMessage as SocketUserMessage;
 
         if (msg == null || msg.Author == null || !msg.Author.IsBot || msg.Interaction == null)
@@ -157,10 +165,9 @@ public class CommandHandler
 
         var context = new ShardedCommandContext(this._discord, msg);
 
-
         if (msg.Flags != MessageFlags.Loading)
         {
-            TryScrobbling(msg, context);
+            _ = Task.Run(() => TryScrobbling(msg, context));
         }
     }
 
@@ -169,22 +176,58 @@ public class CommandHandler
         var searchResult = this._commands.Search(context, argPos);
 
         // If no commands found and message does not start with prefix
-        if ((searchResult.Commands == null || searchResult.Commands.Count == 0) && !msg.Content.StartsWith(prfx))
+        if ((searchResult.Commands == null || searchResult.Commands.Count == 0) && !msg.Content.StartsWith(prfx, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
-        if (!await CommandEnabled(context, searchResult))
+        using (Statistics.TextCommandHandlerDuration.NewTimer())
         {
-            return;
-        }
+            if (!await CommandEnabled(context, searchResult))
+            {
+                return;
+            }
 
-        // If command possibly equals .fm
-        if ((searchResult.Commands == null || searchResult.Commands.Count == 0) && msg.Content.StartsWith(this._botSettings.Bot.Prefix))
-        {
-            var fmSearchResult = this._commands.Search(context, 1);
+            // If command possibly equals .fm
+            if ((searchResult.Commands == null || searchResult.Commands.Count == 0) &&
+                msg.Content.StartsWith(this._botSettings.Bot.Prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var fmSearchResult = this._commands.Search(context, 1);
 
-            if (fmSearchResult.Commands == null || fmSearchResult.Commands.Count == 0)
+                if (fmSearchResult.Commands == null || fmSearchResult.Commands.Count == 0)
+                {
+                    return;
+                }
+
+                if (await this._userService.UserBlockedAsync(context.User.Id))
+                {
+                    await UserBlockedResponse(context, prfx);
+                    return;
+                }
+
+                if (!await CommandEnabled(context, fmSearchResult))
+                {
+                    return;
+                }
+
+                var commandPrefixResult = await this._commands.ExecuteAsync(context, 1, this._provider);
+
+                if (commandPrefixResult.IsSuccess)
+                {
+                    Statistics.CommandsExecuted.WithLabels("fm").Inc();
+
+                    _ = Task.Run(() => this._userService.UpdateUserLastUsedAsync(context.User.Id));
+                    _ = Task.Run(() => this._userService.AddUserTextCommandInteraction(context, "fm"));
+                }
+                else
+                {
+                    Log.Error(commandPrefixResult.ToString(), context.Message.Content);
+                }
+
+                return;
+            }
+
+            if (searchResult.Commands == null || !searchResult.Commands.Any())
             {
                 return;
             }
@@ -195,130 +238,105 @@ public class CommandHandler
                 return;
             }
 
-            if (!await CommandEnabled(context, fmSearchResult))
+            if (searchResult.Commands[0].Command.Attributes.OfType<UsernameSetRequired>().Any())
             {
+                var userIsRegistered = await this._userService.UserRegisteredAsync(context.User);
+                if (!userIsRegistered)
+                {
+                    var embed = new EmbedBuilder()
+                        .WithColor(DiscordConstants.LastFmColorRed);
+                    var userNickname = (context.User as SocketGuildUser)?.DisplayName;
+
+                    embed.UsernameNotSetErrorResponse(prfx ?? this._botSettings.Bot.Prefix,
+                        userNickname ?? context.User.GlobalName ?? context.User.Username);
+                    await context.Channel.SendMessageAsync("", false, embed.Build());
+                    context.LogCommandUsed(CommandResponse.UsernameNotSet);
+                    return;
+                }
+
+                var rateLimit = CheckUserRateLimit(context.User.Id);
+                if (!rateLimit)
+                {
+                    var embed = new EmbedBuilder()
+                        .WithColor(DiscordConstants.WarningColorOrange);
+                    embed.RateLimitedResponse();
+                    await context.Channel.SendMessageAsync("", false, embed.Build());
+                    context.LogCommandUsed(CommandResponse.RateLimited);
+                    return;
+                }
+            }
+
+            if (searchResult.Commands[0].Command.Attributes.OfType<UserSessionRequired>().Any())
+            {
+                var userSession = await this._userService.UserHasSessionAsync(context.User);
+                if (!userSession)
+                {
+                    var embed = new EmbedBuilder()
+                        .WithColor(DiscordConstants.LastFmColorRed);
+                    embed.SessionRequiredResponse(prfx ?? this._botSettings.Bot.Prefix);
+                    await context.Channel.SendMessageAsync("", false, embed.Build());
+                    context.LogCommandUsed(CommandResponse.UsernameNotSet);
+                    return;
+                }
+            }
+
+            if (searchResult.Commands[0].Command.Attributes.OfType<GuildOnly>().Any())
+            {
+                if (context.Guild == null)
+                {
+                    await context.User.SendMessageAsync("This command is not supported in DMs.");
+                    context.LogCommandUsed(CommandResponse.NotSupportedInDm);
+                    return;
+                }
+            }
+
+            if (searchResult.Commands[0].Command.Attributes.OfType<RequiresIndex>().Any() && context.Guild != null)
+            {
+                var lastIndex = await this._guildService.GetGuildIndexTimestampAsync(context.Guild);
+                if (lastIndex == null)
+                {
+                    var embed = new EmbedBuilder();
+                    embed.WithDescription(
+                        "To use .fmbot commands with server-wide statistics you need to create a memberlist cache first.\n\n" +
+                        $"Please run `{prfx}refreshmembers` to create this.\n" +
+                        $"Note that this can take some time on large servers.");
+                    await context.Channel.SendMessageAsync("", false, embed.Build());
+                    context.LogCommandUsed(CommandResponse.IndexRequired);
+                    return;
+                }
+
+                if (lastIndex < DateTime.UtcNow.AddDays(-180))
+                {
+                    _ = Task.Run(() => this.UpdateGuildIndex(context));
+                }
+            }
+
+            var commandName = searchResult.Commands[0].Command.Name;
+            if (msg.Content.EndsWith(" help", StringComparison.OrdinalIgnoreCase) && commandName != "help")
+            {
+                var embed = new EmbedBuilder();
+                var userName = (context.Message.Author as SocketGuildUser)?.DisplayName ??
+                               context.User.GlobalName ?? context.User.Username;
+
+                embed.HelpResponse(searchResult.Commands[0].Command, prfx, userName);
+                await context.Channel.SendMessageAsync("", false, embed.Build());
+                context.LogCommandUsed(CommandResponse.Help);
                 return;
             }
 
-            var commandPrefixResult = await this._commands.ExecuteAsync(context, 1, this._provider);
+            var result = await this._commands.ExecuteAsync(context, argPos, this._provider);
 
-            if (commandPrefixResult.IsSuccess)
+            if (result.IsSuccess)
             {
-                Statistics.CommandsExecuted.WithLabels("fm").Inc();
+                Statistics.CommandsExecuted.WithLabels(commandName).Inc();
+
+                _ = Task.Run(() => this._userService.UpdateUserLastUsedAsync(context.User.Id));
+                _ = Task.Run(() => this._userService.AddUserTextCommandInteraction(context, commandName));
             }
             else
             {
-                Log.Error(commandPrefixResult.ToString(), context.Message.Content);
+                Log.Error(result?.ToString() ?? "Command error (null)", context.Message.Content);
             }
-
-            return;
-        }
-
-        if (searchResult.Commands == null || !searchResult.Commands.Any())
-        {
-            return;
-        }
-
-        if (await this._userService.UserBlockedAsync(context.User.Id))
-        {
-            await UserBlockedResponse(context, prfx);
-            return;
-        }
-
-        if (searchResult.Commands[0].Command.Attributes.OfType<UsernameSetRequired>().Any())
-        {
-            var userIsRegistered = await this._userService.UserRegisteredAsync(context.User);
-            if (!userIsRegistered)
-            {
-                var embed = new EmbedBuilder()
-                    .WithColor(DiscordConstants.LastFmColorRed);
-                var userNickname = (context.User as SocketGuildUser)?.DisplayName;
-
-                embed.UsernameNotSetErrorResponse(prfx ?? this._botSettings.Bot.Prefix, userNickname ?? context.User.GlobalName ?? context.User.Username);
-                await context.Channel.SendMessageAsync("", false, embed.Build());
-                context.LogCommandUsed(CommandResponse.UsernameNotSet);
-                return;
-            }
-
-            var rateLimit = CheckUserRateLimit(context.User.Id);
-            if (!rateLimit)
-            {
-                var embed = new EmbedBuilder()
-                    .WithColor(DiscordConstants.WarningColorOrange);
-                embed.RateLimitedResponse();
-                await context.Channel.SendMessageAsync("", false, embed.Build());
-                context.LogCommandUsed(CommandResponse.RateLimited);
-                return;
-            }
-        }
-        if (searchResult.Commands[0].Command.Attributes.OfType<UserSessionRequired>().Any())
-        {
-            var userSession = await this._userService.UserHasSessionAsync(context.User);
-            if (!userSession)
-            {
-                var embed = new EmbedBuilder()
-                    .WithColor(DiscordConstants.LastFmColorRed);
-                embed.SessionRequiredResponse(prfx ?? this._botSettings.Bot.Prefix);
-                await context.Channel.SendMessageAsync("", false, embed.Build());
-                context.LogCommandUsed(CommandResponse.UsernameNotSet);
-                return;
-            }
-        }
-        if (searchResult.Commands[0].Command.Attributes.OfType<GuildOnly>().Any())
-        {
-            if (context.Guild == null)
-            {
-                await context.User.SendMessageAsync("This command is not supported in DMs.");
-                context.LogCommandUsed(CommandResponse.NotSupportedInDm);
-                return;
-            }
-        }
-        if (searchResult.Commands[0].Command.Attributes.OfType<RequiresIndex>().Any() && context.Guild != null)
-        {
-            var lastIndex = await this._guildService.GetGuildIndexTimestampAsync(context.Guild);
-            if (lastIndex == null)
-            {
-                var embed = new EmbedBuilder();
-                embed.WithDescription("To use .fmbot commands with server-wide statistics you need to create a memberlist cache first.\n\n" +
-                                      $"Please run `{prfx}refreshmembers` to create this.\n" +
-                                      $"Note that this can take some time on large servers.");
-                await context.Channel.SendMessageAsync("", false, embed.Build());
-                context.LogCommandUsed(CommandResponse.IndexRequired);
-                return;
-            }
-            if (lastIndex < DateTime.UtcNow.AddDays(-180))
-            {
-                var embed = new EmbedBuilder();
-                embed.WithDescription("Server member cache is out of date, it was last updated over 180 days ago.\n" +
-                                      $"Please run `{prfx}refreshmembers` to update the cached memberlist.");
-                await context.Channel.SendMessageAsync("", false, embed.Build());
-                context.LogCommandUsed(CommandResponse.IndexRequired);
-                return;
-            }
-        }
-
-        var commandName = searchResult.Commands[0].Command.Name;
-        if (msg.Content.ToLower().EndsWith(" help") && commandName != "help")
-        {
-            var embed = new EmbedBuilder();
-            var userName = (context.Message.Author as SocketGuildUser)?.DisplayName ?? context.User.GlobalName ?? context.User.Username;
-
-            embed.HelpResponse(searchResult.Commands[0].Command, prfx, userName);
-            await context.Channel.SendMessageAsync("", false, embed.Build());
-            context.LogCommandUsed(CommandResponse.Help);
-            return;
-        }
-
-        var result = await this._commands.ExecuteAsync(context, argPos, this._provider);
-
-        if (result.IsSuccess)
-        {
-            Statistics.CommandsExecuted.WithLabels(commandName).Inc();
-            _ = this._userService.UpdateUserLastUsedAsync(context.User.Id);
-        }
-        else
-        {
-            Log.Error(result?.ToString() ?? "Command error (null)", context.Message.Content);
         }
     }
 
@@ -348,8 +366,8 @@ public class CommandHandler
         if (context.Guild != null)
         {
             if (searchResult.Commands != null &&
-                searchResult.Commands.Any(a => a.Command.Name.ToLower() == "togglecommand" ||
-                                               a.Command.Name.ToLower() == "toggleservercommand"))
+                searchResult.Commands.Any(a => a.Command.Name.Equals("togglecommand", StringComparison.OrdinalIgnoreCase) ||
+                                               a.Command.Name.Equals("toggleservercommand", StringComparison.OrdinalIgnoreCase)))
             {
                 return true;
             }
@@ -403,13 +421,13 @@ public class CommandHandler
 
     private async Task UpdateUserLastMessageDate(SocketCommandContext context)
     {
-        var cacheKey = $"{context.User.Id}-{context.Guild.Id}-last-message-updated";
+        var cacheKey = $"{context.User.Id}-{context.Guild.Id}-lst-msg-updated";
         if (this._cache.TryGetValue(cacheKey, out _))
         {
             return;
         }
 
-        this._cache.Set(cacheKey, 1, TimeSpan.FromMinutes(15));
+        this._cache.Set(cacheKey, 1, TimeSpan.FromMinutes(30));
 
         var guildSuccess = PublicProperties.PremiumServers.TryGetValue(context.Guild.Id, out var guildId);
         var userSuccess = PublicProperties.RegisteredUsers.TryGetValue(context.User.Id, out var userId);
@@ -422,5 +440,16 @@ public class CommandHandler
         }
 
         await this._guildService.UpdateGuildUserLastMessageDate(guildUser, userId, guildId);
+    }
+
+    private async Task UpdateGuildIndex(ICommandContext context)
+    {
+        var guildUsers = await context.Guild.GetUsersAsync();
+
+        Log.Information("Downloaded {guildUserCount} users for guild {guildId} / {guildName} from Discord", guildUsers.Count, context.Guild.Id, context.Guild.Name);
+
+        await this._indexService.StoreGuildUsers(context.Guild, guildUsers);
+
+        await this._guildService.UpdateGuildIndexTimestampAsync(context.Guild, DateTime.UtcNow);
     }
 }

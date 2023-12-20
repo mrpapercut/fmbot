@@ -8,6 +8,8 @@ using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using Microsoft.EntityFrameworkCore;
+using Serilog;
+using User = FMBot.Persistence.Domain.Models.User;
 
 namespace FMBot.Bot.Services.ThirdParty;
 
@@ -79,13 +81,18 @@ public class DiscogsService
         var discogsAuth = new DiscogsAuth(user.UserDiscogs.AccessToken,
             user.UserDiscogs.AccessTokenSecret);
 
-        var pages = user.UserType == UserType.User ? 1 : 50;
+        var pages = SupporterService.IsSupporter(user.UserType) ? 50 : 1;
 
         var releases = await this._discogsApi.GetUserReleases(discogsAuth, user.UserDiscogs.Username, pages);
 
-        await using var db = await this._contextFactory.CreateDbContextAsync();
+        if (releases?.Releases == null || releases.Releases.Count == 0)
+        {
+            user.DiscogsReleases = new List<UserDiscogsReleases>();
 
-        await db.Database.ExecuteSqlAsync($"DELETE FROM user_discogs_releases WHERE user_id = {user.UserId}");
+            return user.UserDiscogs;
+        }
+
+        await using var db = await this._contextFactory.CreateDbContextAsync();
 
         var ids = releases.Releases.Select(s => s.Id);
         var existingReleases = await db.DiscogsReleases
@@ -156,6 +163,8 @@ public class DiscogsService
             await db.UserDiscogsReleases.AddAsync(userDiscogsRelease);
         }
 
+        await db.Database.ExecuteSqlAsync($"DELETE FROM user_discogs_releases WHERE user_id = {user.UserId}");
+
         await db.SaveChangesAsync();
 
         return user.UserDiscogs;
@@ -189,6 +198,71 @@ public class DiscogsService
         return user.UserDiscogs;
     }
 
+    public async Task<bool?> ToggleCollectionValueHidden(int userId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+
+        var user = await db.Users
+            .Include(i => i.UserDiscogs)
+            .FirstAsync(f => f.UserId == userId);
+
+        user.UserDiscogs.HideValue = user.UserDiscogs.HideValue != true;
+
+        db.UserDiscogs.Update(user.UserDiscogs);
+        await db.SaveChangesAsync();
+
+        return user.UserDiscogs.HideValue;
+    }
+
+    public async Task RemoveDiscogs(int userId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+
+        var user = await db.Users
+            .Include(i => i.UserDiscogs)
+            .Include(i => i.DiscogsReleases)
+            .FirstAsync(f => f.UserId == userId);
+
+        db.UserDiscogs.Remove(user.UserDiscogs);
+
+        if (user.DiscogsReleases.Count != 0)
+        {
+            db.UserDiscogsReleases.RemoveRange(user.DiscogsReleases);
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    public async Task UpdateDiscogsUsers(List<User> usersToUpdate)
+    {
+        foreach (var user in usersToUpdate)
+        {
+            Log.Information("Discogs: Automatically updating {userId}", user.UserId);
+            await UpdateUserDiscogs(user);
+
+            await Task.Delay(5000);
+        }
+    }
+
+    public async Task<List<User>> GetOutdatedDiscogsUsers()
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+
+        var updateCutoff = DateTime.UtcNow.AddMonths(-1);
+        return await db.Users
+            .Include(i => i.UserDiscogs)
+            .Where(w => w.UserDiscogs != null &&
+                        w.UserDiscogs.ReleasesLastUpdated < updateCutoff)
+            .Take(500)
+            .ToListAsync();
+    }
+
+    private async Task UpdateUserDiscogs(User user)
+    {
+        user.UserDiscogs = await this.StoreUserReleases(user);
+        user.UserDiscogs = await this.UpdateCollectionValue(user.UserId);
+    }
+
     public async Task<List<UserDiscogsReleases>> GetUserCollection(int userId)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -197,5 +271,36 @@ public class DiscogsService
             .ThenInclude(i => i.FormatDescriptions)
             .Where(w => w.UserId == userId)
             .ToListAsync();
+    }
+
+    public static int? DiscogsReleaseUrlToId(string url)
+    {
+        var identifier = url
+            .Replace("https://www.discogs.com/release/", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("<", "")
+            .Replace(">", "");
+
+        var splitIdentifier = identifier.Split('-');
+        var id = splitIdentifier[0];
+
+        if (int.TryParse(id, out var result))
+        {
+            return result;
+        }
+
+        return null;
+    }
+
+    public async Task<DiscogsFullRelease> GetDiscogsRelease(int userId, int releaseId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+
+        var user = await db.Users
+            .Include(i => i.UserDiscogs)
+            .FirstAsync(f => f.UserId == userId);
+
+        return await this._discogsApi.GetRelease(
+            new DiscogsAuth(user.UserDiscogs.AccessToken, user.UserDiscogs.AccessTokenSecret),
+            releaseId);
     }
 }

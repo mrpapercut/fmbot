@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection.Metadata.Ecma335;
 using System.Threading.Tasks;
 using Dapper;
+using Discord;
 using Discord.Commands;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Models;
@@ -54,7 +55,7 @@ public class TimeService
         return TimeSpan.FromMilliseconds(timeListened);
     }
 
-    private long GetTrackLengthForTrack(string artistName, string trackName)
+    public long GetTrackLengthForTrack(string artistName, string trackName)
     {
         var trackLength = (long?)this._cache.Get(CacheKeyForTrack(trackName.ToLower(), artistName.ToLower()));
 
@@ -191,7 +192,7 @@ public class TimeService
         }
 
         const string sql = "SELECT LOWER(artist_name) as artist_name, LOWER(name) as track_name, duration_ms " +
-                           "FROM public.tracks where duration_ms is not null;";
+                           "FROM public.tracks where duration_ms is not null and duration_ms != 0;";
 
         DefaultTypeMap.MatchNamesWithUnderscores = true;
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
@@ -214,14 +215,14 @@ public class TimeService
 
     private static string CacheKeyForTrack(string trackName, string artistName)
     {
-        return $"track-length-{trackName}-{artistName}";
+        return $"tr-l-{trackName}-{artistName}";
     }
     private static string CacheKeyForArtist(string artistName)
     {
-        return $"artist-length-avg-{artistName}";
+        return $"at-l-avg-{artistName}";
     }
 
-    public async Task<List<WhoKnowsObjectWithUser>> UserPlaysToGuildLeaderboard(ICommandContext context, List<UserPlay> userPlays, IDictionary<int, FullGuildUser> guildUsers)
+    public async Task<List<WhoKnowsObjectWithUser>> UserPlaysToGuildLeaderboard(IGuild discordGuild, List<UserPlay> userPlays, IDictionary<int, FullGuildUser> guildUsers)
     {
         var whoKnowsAlbumList = new List<WhoKnowsObjectWithUser>();
 
@@ -229,24 +230,18 @@ public class TimeService
             .GroupBy(g => g.UserId)
             .ToList();
 
-        for (var i = 0; i < userPlaysPerUser.Count(); i++)
+        foreach (var user in userPlaysPerUser)
         {
-            var user = userPlaysPerUser[i];
-
             var timeListened = await GetPlayTimeForPlays(user);
-
 
             if (guildUsers.TryGetValue(user.Key, out var guildUser))
             {
                 var userName = guildUser.UserName ?? guildUser.UserNameLastFM;
 
-                if (i <= 10)
+                var discordUser = await discordGuild.GetUserAsync(guildUser.DiscordUserId, CacheMode.CacheOnly);
+                if (discordUser != null)
                 {
-                    var discordUser = await context.Guild.GetUserAsync(guildUser.DiscordUserId);
-                    if (discordUser != null)
-                    {
-                        userName = discordUser.DisplayName;
-                    }
+                    userName = discordUser.DisplayName;
                 }
 
                 whoKnowsAlbumList.Add(new WhoKnowsObjectWithUser

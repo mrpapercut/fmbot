@@ -37,6 +37,12 @@ public class UserEventHandler
     {
         Statistics.DiscordEvents.WithLabels(nameof(GuildMemberUpdated)).Inc();
 
+        if (cacheable.Id == Constants.BotProductionId || newGuildUser.Id == Constants.BotProductionId ||
+            cacheable.Id == Constants.BotBetaId || newGuildUser.Id == Constants.BotBetaId)
+        {
+            return;
+        }
+
         if (!PublicProperties.RegisteredUsers.ContainsKey(cacheable.Id) ||
             !PublicProperties.RegisteredUsers.ContainsKey(newGuildUser.Id))
         {
@@ -67,7 +73,7 @@ public class UserEventHandler
         Statistics.DiscordEvents.WithLabels(nameof(UserJoined)).Inc();
 
         if (socketGuildUser.Guild.Id == this._botSettings.Bot.BaseServerId &&
-            this._botSettings.Bot.FeaturedMaster == true)
+            this._client.CurrentUser.Id == Constants.BotProductionId)
         {
             var user = await this._userService.GetUserAsync(socketGuildUser.Id);
             if (user is { UserType: UserType.Supporter })
@@ -81,7 +87,7 @@ public class UserEventHandler
     {
         Statistics.DiscordEvents.WithLabels(nameof(UserLeft)).Inc();
 
-        if (socketGuild != null && socketUser != null)
+        if (socketGuild != null && socketUser != null && PublicProperties.RegisteredUsers.ContainsKey(socketUser.Id))
         {
             _ = this._indexService.RemoveUserFromGuild(socketUser.Id, socketGuild.Id);
             _ = this._crownService.RemoveAllCrownsFromDiscordUser(socketUser.Id, socketGuild.Id);
@@ -92,7 +98,10 @@ public class UserEventHandler
     {
         Statistics.DiscordEvents.WithLabels(nameof(UserBanned)).Inc();
 
-        _ = this._indexService.RemoveUserFromGuild(guildUser.Id, guild.Id);
-        _ = this._crownService.RemoveAllCrownsFromDiscordUser(guildUser.Id, guild.Id);
+        if (guildUser != null && guild != null && PublicProperties.RegisteredUsers.ContainsKey(guildUser.Id))
+        {
+            _ = this._indexService.RemoveUserFromGuild(guildUser.Id, guild.Id);
+            _ = this._crownService.RemoveAllCrownsFromDiscordUser(guildUser.Id, guild.Id);
+        }
     }
 }

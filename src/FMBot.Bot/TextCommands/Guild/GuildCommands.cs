@@ -30,6 +30,7 @@ public class GuildCommands : BaseCommandModule
     private readonly GuildService _guildService;
     private readonly UserService _userService;
     private readonly GuildSettingBuilder _guildSettingBuilder;
+    private readonly GuildBuilders _guildBuilders;
 
     private readonly IMemoryCache _cache;
 
@@ -43,7 +44,8 @@ public class GuildCommands : BaseCommandModule
         IMemoryCache cache,
         GuildSettingBuilder guildSettingBuilder,
         UserService userService,
-        InteractiveService interactivity) : base(botSettings)
+        InteractiveService interactivity,
+        GuildBuilders guildBuilders) : base(botSettings)
     {
         this._prefixService = prefixService;
         this._guildService = guildService;
@@ -51,13 +53,14 @@ public class GuildCommands : BaseCommandModule
         this._guildSettingBuilder = guildSettingBuilder;
         this._userService = userService;
         this.Interactivity = interactivity;
+        this._guildBuilders = guildBuilders;
     }
 
     [Command("configuration", RunMode = RunMode.Async)]
     [Summary("Shows server configuration for .fmbot")]
     [UsernameSetRequired]
     [CommandCategories(CommandCategory.ServerSettings)]
-    [Alias("ss", "config", "serversettings", "settings", "fmbotconfig", "serverconfig")]
+    [Alias("ss", "config", "serversettings", "fmbotconfig", "serverconfig")]
     public async Task GuildSettingsAsync([Remainder] string searchValues = null)
     {
         _ = this.Context.Channel.TriggerTypingAsync();
@@ -79,16 +82,42 @@ public class GuildCommands : BaseCommandModule
         }
     }
 
+    [Command("members", RunMode = RunMode.Async)]
+    [Summary("view members in your server that have an .fmbot account")]
+    [UsernameSetRequired]
+    [CommandCategories(CommandCategory.ServerSettings)]
+    [Alias("mb", "users", "memberoverview", "mo")]
+    public async Task MemberOverviewAsync([Remainder] string searchValues = null)
+    {
+        _ = this.Context.Channel.TriggerTypingAsync();
+
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+        var guild = await this._guildService.GetGuildAsync(this.Context.Guild.Id);
+
+        try
+        {
+            var response = await this._guildBuilders.MemberOverviewAsync(new ContextModel(this.Context, prfx, contextUser), guild, GuildViewType.Overview);
+
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [Command("keepdata", RunMode = RunMode.Async)]
     [Summary("Allows you to keep your server data when removing the bot from your server")]
     [GuildOnly]
     [CommandCategories(CommandCategory.ServerSettings)]
     public async Task KeepDataAsync(params string[] otherSettings)
     {
-        this._cache.Set($"{this.Context.Guild.Id}-keep-data", true, TimeSpan.FromMinutes(5));
+        this._cache.Set($"{this.Context.Guild.Id}-keep-data", true, TimeSpan.FromMinutes(30));
 
         await ReplyAsync(
-            "You can now kick this bot from your server in the next 5 minutes without losing the stored .fmbot data, like server settings and crown history.\n\n" +
+            "You can now kick this bot from your server in the next 30 minutes without losing the stored .fmbot data, like server settings and crown history.\n\n" +
             "If you still wish to remove all server data from the bot you can kick the bot after the time period is over.");
     }
 
@@ -216,83 +245,6 @@ public class GuildCommands : BaseCommandModule
         }
     }
 
-    //[Command("togglesupportermessages", RunMode = RunMode.Async)]
-    //[Summary("Enables/ disables the supporter messages on the `chart` command")]
-    //[Alias("togglesupporter", "togglesupporters", "togglesupport")]
-    //[GuildOnly]
-    //[CommandCategories(CommandCategory.ServerSettings)]
-    public async Task ToggleSupportMessagesAsync()
-    {
-        _ = this.Context.Channel.TriggerTypingAsync();
-
-        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
-        if (!await this._guildSettingBuilder.UserIsAllowed(new ContextModel(this.Context, prfx)))
-        {
-            await ReplyAsync(GuildSettingBuilder.UserNotAllowedResponseText());
-            this.Context.LogCommandUsed(CommandResponse.NoPermission);
-            return;
-        }
-
-        var messagesDisabled = await this._guildService.ToggleSupporterMessagesAsync(this.Context.Guild);
-
-        if (messagesDisabled == true)
-        {
-            await ReplyAsync($".fmbot supporter messages have been disabled. Supporters are still visible in `{prfx}supporters`, but they will not be shown in `{prfx}chart` or other commands anymore.");
-        }
-        else
-        {
-            await ReplyAsync($".fmbot supporter messages have been re-enabled. These have a 1 in {Constants.SupporterMessageChance} chance of showing up on certain commands.");
-        }
-
-        this.Context.LogCommandUsed();
-    }
-
-    //[Command("export", RunMode = RunMode.Async)]
-    //[Summary("Gets Last.fm usernames from your server members in json format.")]
-    //[Alias("getmembers", "exportmembers")]
-    //[GuildOnly]
-    //[CommandCategories(CommandCategory.ServerSettings)]
-    public async Task GetMembersAsync()
-    {
-        _ = this.Context.Channel.TriggerTypingAsync();
-
-        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
-        if (!await this._guildSettingBuilder.UserIsAllowed(new ContextModel(this.Context, prfx)))
-        {
-            await ReplyAsync(GuildSettingBuilder.UserNotAllowedResponseText());
-            this.Context.LogCommandUsed(CommandResponse.NoPermission);
-            return;
-        }
-
-        try
-        {
-            var serverUsers = await this._guildService.FindAllUsersFromGuildAsync(this.Context.Guild);
-
-            if (serverUsers.Count == 0)
-            {
-                await ReplyAsync("No members found on this server.");
-                this.Context.LogCommandUsed(CommandResponse.NotFound);
-                return;
-            }
-
-            var userJson = JsonSerializer.Serialize(serverUsers, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
-
-            await this.Context.User.SendFileAsync(StringToStream(userJson),
-                $"users_{this.Context.Guild.Name}_UTC-{DateTime.UtcNow:u}.json");
-
-            await ReplyAsync("Check your DMs!");
-            this.Context.LogCommandUsed();
-        }
-        catch (Exception e)
-        {
-            await this.Context.HandleCommandException(e);
-        }
-    }
-
     [Command("prefix", RunMode = RunMode.Async)]
     [Summary("Changes the `.fm` prefix for your server.\n\n" +
              "For example, with the prefix `!` commands will be used as `!chart` and `!whoknows`\n\n" +
@@ -343,7 +295,7 @@ public class GuildCommands : BaseCommandModule
     [RequiresIndex]
     [Command("togglecommand", RunMode = RunMode.Async)]
     [Summary("Enables or disables a command in a channel")]
-    [Alias("togglecommands", "channeltoggle", "togglechannel", "togglechannelcommand", "togglechannelcommands")]
+    [Alias("togglecommands", "channeltoggle", "togglechannel", "togglechannelcommand", "togglechannelcommands", "channelmode", "channelfmmode")]
     [CommandCategories(CommandCategory.ServerSettings)]
     public async Task ToggleChannelCommand(string _ = null)
     {
@@ -409,15 +361,5 @@ public class GuildCommands : BaseCommandModule
 
         await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
         this.Context.LogCommandUsed();
-    }
-
-    private static Stream StringToStream(string str)
-    {
-        var stream = new MemoryStream();
-        var writer = new StreamWriter(stream);
-        writer.Write(str);
-        writer.Flush();
-        stream.Position = 0;
-        return stream;
     }
 }

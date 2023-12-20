@@ -17,12 +17,13 @@ using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
+using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
 using FMBot.Domain.Attributes;
+using FMBot.Domain.Enums;
+using FMBot.Domain.Flags;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Repositories;
-using Google.Apis.Discovery;
 using Hangfire;
 using Hangfire.Storage;
 using Microsoft.Extensions.Options;
@@ -48,6 +49,10 @@ public class AdminCommands : BaseCommandModule
     private readonly IPrefixService _prefixService;
     private readonly StaticBuilders _staticBuilders;
     private readonly AlbumService _albumService;
+    private readonly ArtistsService _artistsService;
+    private readonly AliasService _aliasService;
+    private readonly WhoKnowsFilterService _whoKnowsFilterService;
+    private readonly PlayService _playService;
 
     private InteractiveService Interactivity { get; }
 
@@ -64,7 +69,13 @@ public class AdminCommands : BaseCommandModule
         FeaturedService featuredService,
         IIndexService indexService,
         IPrefixService prefixService,
-        StaticBuilders staticBuilders, InteractiveService interactivity, AlbumService albumService) : base(botSettings)
+        StaticBuilders staticBuilders,
+        InteractiveService interactivity,
+        AlbumService albumService,
+        ArtistsService artistsService,
+        AliasService aliasService,
+        WhoKnowsFilterService whoKnowsFilterService,
+        PlayService playService) : base(botSettings)
     {
         this._adminService = adminService;
         this._censorService = censorService;
@@ -80,6 +91,10 @@ public class AdminCommands : BaseCommandModule
         this._staticBuilders = staticBuilders;
         this.Interactivity = interactivity;
         this._albumService = albumService;
+        this._artistsService = artistsService;
+        this._aliasService = aliasService;
+        this._whoKnowsFilterService = whoKnowsFilterService;
+        this._playService = playService;
     }
 
     //[Command("debug")]
@@ -228,6 +243,168 @@ public class AdminCommands : BaseCommandModule
         }
     }
 
+    [Command("updategwfilter")]
+    [Summary("Updates gwk quality filter")]
+    public async Task UpdateGlobalWhoKnowsFilter([Remainder] string _ = null)
+    {
+        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            await ReplyAsync("Starting gwk quality filter update..");
+
+            var filteredUsers = await this._whoKnowsFilterService.GetNewGlobalFilteredUsers();
+            await this._whoKnowsFilterService.AddFilteredUsersToDatabase(filteredUsers);
+
+            var description = new StringBuilder();
+
+            description.AppendLine($"Found {filteredUsers.Count(c => c.Reason == GlobalFilterReason.PlayTimeInPeriod)} users exceeding max playtime");
+            description.AppendLine($"Found {filteredUsers.Count(c => c.Reason == GlobalFilterReason.AmountPerPeriod)} users exceeding max amount");
+            await ReplyAsync(description.ToString());
+
+            this.Context.LogCommandUsed();
+        }
+        else
+        {
+            await ReplyAsync(Constants.FmbotStaffOnly);
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+        }
+    }
+
+    [Command("debuglogs")]
+    [Summary("View user command logs")]
+    public async Task DebugLogs([Remainder] string user = null)
+    {
+        try
+        {
+            if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+            {
+                var guild = await this._guildService.GetGuildAsync(this.Context.Guild.Id);
+
+                if (guild.SpecialGuild != true)
+                {
+                    await ReplyAsync("This command can only be used in special guilds.");
+                    this.Context.LogCommandUsed(CommandResponse.NoPermission);
+                    return;
+                }
+
+                user ??= this.Context.User.Id.ToString();
+
+                var userToView = await this._settingService.GetDifferentUser(user);
+
+                if (userToView == null)
+                {
+                    await ReplyAsync("User not found. Are you sure they are registered in .fmbot?");
+                    this.Context.LogCommandUsed(CommandResponse.NotFound);
+                    return;
+                }
+
+                var logs = await this._adminService.GetRecentUserInteractions(userToView.UserId);
+
+                var logPages = logs.Chunk(10).ToList();
+                var pageCounter = 1;
+
+                var pages = new List<PageBuilder>();
+                foreach (var logPage in logPages)
+                {
+                    var description = new StringBuilder();
+
+                    foreach (var log in logPage)
+                    {
+                        if (log.Type == UserInteractionType.SlashCommand)
+                        {
+                            description.Append($"/");
+                        }
+                        description.Append($"**{log.CommandName}** - <t:{log.Timestamp.ToUnixEpochDate()}:R>");
+
+                        if (log.ErrorReferenceId != null)
+                        {
+                            description.Append($" - ❌");
+                        }
+                        else if (log.Response != CommandResponse.Ok)
+                        {
+                            description.Append($" - 🫥");
+                        }
+                        else
+                        {
+                            description.Append($" - ✅");
+                        }
+
+                        description.AppendLine();
+
+                        if (log.Artist != null || log.Album != null || log.Track != null)
+                        {
+                            description.Append("*");
+                            if (log.Artist != null)
+                            {
+                                description.Append(log.Artist);
+                            }
+                            if (log.Album != null)
+                            {
+                                description.Append($" - {log.Album}");
+                            }
+                            if (log.Track != null)
+                            {
+                                description.Append($" - {log.Track}");
+                            }
+                            description.Append("*");
+                            description.AppendLine();
+                        }
+
+                        if (log.Type == UserInteractionType.TextCommand)
+                        {
+                            description.AppendLine($"*`{log.CommandContent}`*");
+                        }
+
+                        if (log.ErrorReferenceId != null)
+                        {
+                            description.AppendLine($"Error - Reference {log.ErrorReferenceId}");
+                        }
+                        else if (log.Response != CommandResponse.Ok)
+                        {
+                            description.AppendLine($"{Enum.GetName(log.Response)}");
+                        }
+
+                        description.AppendLine();
+                    }
+
+                    pages.Add(new PageBuilder()
+                        .WithDescription(description.ToString())
+                        .WithFooter($"Page {pageCounter}/{logPages.Count()} - Limited to 3 days\n" +
+                                    $"{userToView.DiscordUserId} - {userToView.UserId}\n" +
+                                    $"Command not intended for use in public channels")
+                        .WithTitle($"User command log for {userToView.UserNameLastFM}"));
+
+                    pageCounter++;
+                }
+
+                if (!pages.Any())
+                {
+                    pages.Add(new PageBuilder()
+                        .WithDescription("No bot scrobbling logs yet, make sure fmbot can see the 'Now playing' message")
+                        .WithFooter($"Page {pageCounter}/{logPages.Count()}")
+                        .WithTitle($"Bot scrobbling debug log for {this.Context.Guild.Name} | {this.Context.Guild.Id}"));
+                }
+
+                var paginator = StringService.BuildStaticPaginator(pages);
+
+                _ = this.Interactivity.SendPaginatorAsync(
+                    paginator,
+                    this.Context.Channel,
+                    TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds));
+
+                this.Context.LogCommandUsed();
+            }
+            else
+            {
+                await ReplyAsync("You are not authorized to use this command.");
+                this.Context.LogCommandUsed(CommandResponse.NoPermission);
+            }
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [Command("purgecache")]
     [Summary("Purges discord caches")]
     public async Task PurgeCacheAsync()
@@ -300,7 +477,7 @@ public class AdminCommands : BaseCommandModule
 
     [Command("discordsupporters", RunMode = RunMode.Async)]
     [Summary("Displays all .fmbot supporters.")]
-    [Alias("dsupporters")]
+    [Alias("dsupporters", "dsupp", "discsupp")]
     public async Task DiscordSupportersAsync()
     {
         if (!await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
@@ -404,6 +581,73 @@ public class AdminCommands : BaseCommandModule
             this._embed.AddField("Artist name", existingAlbum.ArtistName);
             this._embed.AddField("Times censored", existingAlbum.TimesCensored ?? 0);
             this._embed.AddField("Types", censorDescription.ToString());
+
+            await ReplyAsync(embed: this._embed.Build(), components: builder.Build());
+            this.Context.LogCommandUsed();
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [Command("managealias")]
+    [Summary("Manage artist alias")]
+    public async Task ManageArtistAlias([Remainder] string alias)
+    {
+        try
+        {
+            if (!await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+            {
+                await ReplyAsync(Constants.FmbotStaffOnly);
+                this.Context.LogCommandUsed(CommandResponse.NoPermission);
+                return;
+            }
+
+            var artistAlias = await this._aliasService.GetArtistAlias(alias);
+            if (artistAlias == null)
+            {
+                await ReplyAsync("Artist alias not found");
+                this.Context.LogCommandUsed(CommandResponse.NotFound);
+                return;
+            }
+
+            var aliasOptions = new SelectMenuBuilder()
+                .WithPlaceholder("Select alias options")
+                .WithCustomId($"artist-alias-{artistAlias.Id}")
+                .WithMinValues(0)
+                .WithMaxValues(5);
+
+            var censorDescription = new StringBuilder();
+            foreach (var option in ((AliasOption[])Enum.GetValues(typeof(AliasOption))))
+            {
+                var name = option.GetAttribute<OptionAttribute>().Name;
+                var description = option.GetAttribute<OptionAttribute>().Description;
+                var value = Enum.GetName(option);
+
+                var active = artistAlias.Options.HasFlag(option);
+
+                censorDescription.Append(active ? "✅" : "❌");
+                censorDescription.Append(" - ");
+                censorDescription.AppendLine(name);
+
+                aliasOptions.AddOption(new SelectMenuOptionBuilder(name, value, description, isDefault: active));
+            }
+
+            var builder = new ComponentBuilder()
+                .WithSelectMenu(aliasOptions);
+
+            this._embed.WithTitle("Artist alias - Option information");
+
+            var artist = await this._artistsService.GetArtistForId(artistAlias.ArtistId);
+
+            this._embed.AddField("Artist name", artist.Name);
+            this._embed.AddField("Alias", artistAlias.Alias);
+            this._embed.AddField("Types", censorDescription.ToString());
+
+            this._embed.WithFooter($"Artist id {artistAlias.ArtistId}\n" +
+                                   "Case insensitive\n" +
+                                   "Aliases are cached for 5 minutes");
 
             await ReplyAsync(embed: this._embed.Build(), components: builder.Build());
             this.Context.LogCommandUsed();
@@ -541,13 +785,16 @@ public class AdminCommands : BaseCommandModule
 
             var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
             var targetedUser = await this._settingService.GetUser(user, contextUser, this.Context);
+            var targetedDate = (DateTime?)null;
 
             if (targetedUser.DifferentUser)
             {
                 user = targetedUser.UserNameLastFm;
+                targetedDate = targetedUser.RegisteredLastFm;
             }
 
-            var bottedUser = await this._adminService.GetBottedUserAsync(user);
+            var bottedUser = await this._adminService.GetBottedUserAsync(user, targetedDate);
+            var filteredUser = await this._adminService.GetFilteredUserAsync(user, targetedDate);
 
             var userInfo = await this._dataSourceFactory.GetLfmUserInfoAsync(user);
 
@@ -586,9 +833,40 @@ public class AdminCommands : BaseCommandModule
                 }
             }
 
+
+            if (filteredUser != null)
+            {
+                var startDate = filteredUser.OccurrenceEnd ?? filteredUser.Created;
+                if (startDate > DateTime.UtcNow.AddMonths(-3))
+                {
+                    this._embed.AddField("Globally filtered", "Yes");
+                    this._embed.AddField("Filter reason", WhoKnowsFilterService.FilteredUserReason(filteredUser));
+
+                    var specifiedDateTime = DateTime.SpecifyKind(startDate.AddMonths(3), DateTimeKind.Utc);
+                    var dateValue = ((DateTimeOffset)specifiedDateTime).ToUnixTimeSeconds();
+
+                    this._embed.AddField("Filter expires", $"<t:{dateValue}:R> - <t:{dateValue}:F>");
+                }
+                else
+                {
+                    this._embed.AddField("Globally filtered", "No, but was filtered in the past");
+                    this._embed.AddField("Expired filter reason", WhoKnowsFilterService.FilteredUserReason(filteredUser));
+                }
+            }
+            else
+            {
+                this._embed.AddField("Globally filtered", "No");
+            }
+
+            ComponentBuilder components = null;
+            if (filteredUser != null && bottedUser == null)
+            {
+                components = new ComponentBuilder().WithButton($"Convert to ban", $"gwk-filtered-user-to-ban-{filteredUser.GlobalFilteredUserId}", style: ButtonStyle.Secondary);
+            }
+
             this._embed.WithFooter("Command not intended for use in public channels");
 
-            await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
+            await ReplyAsync("", false, this._embed.Build(), components: components?.Build()).ConfigureAwait(false);
             this.Context.LogCommandUsed();
         }
         else
@@ -924,13 +1202,6 @@ public class AdminCommands : BaseCommandModule
 
             var supporter = await this._supporterService.GetSupporter(discordUserId);
 
-            if (supporter == null)
-            {
-                await ReplyAsync("Supporter not found");
-                this.Context.LogCommandUsed(CommandResponse.NotFound);
-                return;
-            }
-
             var discordUser = await this.Context.Client.GetUserAsync(discordUserId);
 
             if (discordUser == null)
@@ -968,7 +1239,11 @@ public class AdminCommands : BaseCommandModule
                 return;
             }
 
-            await SupporterService.SendSupporterGoodbyeMessage(discordUser);
+            var userSettings = await this._userService.GetUserAsync(discordUserId);
+
+            var hasImported = userSettings != null && userSettings.DataSource != DataSource.LastFm;
+
+            await SupporterService.SendSupporterGoodbyeMessage(discordUser, hadImported: hasImported);
 
             await ReplyAsync("✅ Goodbye dm sent");
         }
@@ -1010,6 +1285,8 @@ public class AdminCommands : BaseCommandModule
                 this.Context.LogCommandUsed(CommandResponse.WrongInput);
                 return;
             }
+
+            var hadImported = userSettings.DataSource != DataSource.LastFm;
 
             var existingSupporter = await this._supporterService.GetSupporter(discordUserId);
             if (existingSupporter == null)
@@ -1054,7 +1331,7 @@ public class AdminCommands : BaseCommandModule
             var discordUser = await this.Context.Client.GetUserAsync(discordUserId);
             if (discordUser != null && sendDm == null)
             {
-                await SupporterService.SendSupporterGoodbyeMessage(discordUser);
+                await SupporterService.SendSupporterGoodbyeMessage(discordUser, hadImported: hadImported);
 
                 description.AppendLine("✅ Goodbye dm sent");
             }
@@ -1190,7 +1467,7 @@ public class AdminCommands : BaseCommandModule
     [ExcludeFromHelp]
     [Alias("reconnectshards")]
     [Examples("shard 0", "shard 821660544581763093")]
-    public async Task ShardInfoAsync(ulong? guildId = null)
+    public async Task ReconnectShardAsync(ulong? guildId = null)
     {
         if (!await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
         {
@@ -1244,7 +1521,7 @@ public class AdminCommands : BaseCommandModule
         this.Context.LogCommandUsed();
     }
 
-    [Command("postembed"), Summary("Changes the avatar to be an album.")]
+    [Command("postembed"), Summary("Posts one of the reporting embeds")]
     [Examples("postembed \"gwkreporter\"")]
     public async Task PostAdminEmbed([Remainder] string type = null)
     {
@@ -1272,10 +1549,10 @@ public class AdminCommands : BaseCommandModule
             description.AppendLine();
             description.AppendLine("Optionally you can add a note to your report. Keep in mind that everyone is kept to the same standard regardless of the added note.");
             description.AppendLine();
-            description.AppendLine("Note that we are currently not taking reports for sleep or 24/7 scrobbling, we plan to do automated bans for those accounts in the future.");
+            description.AppendLine("Note that we don't take reports for sleep or 24/7 scrobbling, those get filtered automatically with temporary bans.");
             this._embed.WithDescription(description.ToString());
 
-            var components = new ComponentBuilder().WithButton("Report user", style: ButtonStyle.Secondary, customId: InteractionConstants.GlobalWhoKnowsReport);
+            var components = new ComponentBuilder().WithButton("Report user", style: ButtonStyle.Secondary, customId: InteractionConstants.ModerationCommands.GlobalWhoKnowsReport);
             await ReplyAsync(embed: this._embed.Build(), components: components.Build());
         }
 
@@ -1296,8 +1573,8 @@ public class AdminCommands : BaseCommandModule
             this._embed.WithDescription(description.ToString());
 
             var components = new ComponentBuilder()
-                .WithButton("Report artist image", style: ButtonStyle.Secondary, customId: InteractionConstants.ReportArtist)
-                .WithButton("Report album cover", style: ButtonStyle.Secondary, customId: InteractionConstants.ReportAlbum);
+                .WithButton("Report artist image", style: ButtonStyle.Secondary, customId: InteractionConstants.ModerationCommands.ReportArtist)
+                .WithButton("Report album cover", style: ButtonStyle.Secondary, customId: InteractionConstants.ModerationCommands.ReportAlbum);
 
             await ReplyAsync(embed: this._embed.Build(), components: components.Build());
         }
@@ -1394,7 +1671,7 @@ public class AdminCommands : BaseCommandModule
                 updateDescription.AppendLine(newFeature.ImageUrl);
                 updateDescription.AppendLine();
 
-                updateDescription.AppendLine("Featured timer restarted. Can take up to two minutes to show, max 3 times / hour");
+                updateDescription.AppendLine("Featured timer restarted. Can take up to three minutes to show, max 3 times / hour");
 
                 var dateValue = ((DateTimeOffset)feature.DateTime).ToUnixTimeSeconds();
                 this._embed.AddField("Time", $"<t:{dateValue}:F>");
@@ -1438,6 +1715,138 @@ public class AdminCommands : BaseCommandModule
         }
     }
 
+    [Command("updatediscordsupporters")]
+    [Summary("Updates all discord supporters")]
+    public async Task UpdateDiscordSupporters()
+    {
+        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            try
+            {
+                await ReplyAsync("Fetching supporters from Discord...");
+                await this._supporterService.UpdateAllDiscordSupporters();
+                await ReplyAsync("Updated all Discord supporters");
+            }
+            catch (Exception e)
+            {
+                await this.Context.HandleCommandException(e);
+            }
+        }
+        else
+        {
+            await ReplyAsync("Error: Insufficient rights. Only FMBot owners can stop timer.");
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+        }
+    }
+
+    [Command("checkdiscordsupporterusers")]
+    [Summary("Updates all discord supporters")]
+    public async Task CheckDiscordSupporterUserTypes()
+    {
+        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            try
+            {
+                await ReplyAsync("Fetching supporters from Discord...");
+                await this._supporterService.CheckIfDiscordSupportersHaveCorrectUserType();
+                await ReplyAsync("Updated all Discord supporters");
+            }
+            catch (Exception e)
+            {
+                await this.Context.HandleCommandException(e);
+            }
+        }
+        else
+        {
+            await ReplyAsync("Error: Insufficient rights. Only FMBot owners can stop timer.");
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+        }
+    }
+
+    [Command("checksupporterroles")]
+    [Summary("Updates all discord supporters")]
+    public async Task CheckDiscordSupporterRoles()
+    {
+        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            try
+            {
+                _ = this.Context.Channel.TriggerTypingAsync();
+                var supporters = await this._supporterService.GetAllVisibleSupporters();
+
+                var members = await this.Context.Guild.GetUsersAsync();
+
+                var discordUserIds = supporters
+                    .Where(w => w.DiscordUserId.HasValue)
+                    .Select(s => s.DiscordUserId.Value)
+                    .ToHashSet();
+
+                var count = 0;
+                var role = this.Context.Guild.Roles.FirstOrDefault(x => x.Name == "Supporter");
+
+                var reply = new StringBuilder();
+
+                foreach (var member in members.Where(w => discordUserIds.Contains(w.Id)))
+                {
+                    if (member.RoleIds.All(a => a != role.Id))
+                    {
+                        await member.AddRoleAsync(role);
+                        reply.AppendLine($"{member.Id} - <@{member.Id}> - {member.DisplayName}");
+
+                        count++;
+                    }
+                }
+
+                reply.AppendLine();
+                reply.AppendLine($"Updated all Discord supporters.");
+                reply.AppendLine($"{count} users didn't have the supporter role when they should have had it.");
+
+                await ReplyAsync(reply.ToString());
+            }
+            catch (Exception e)
+            {
+                await this.Context.HandleCommandException(e);
+            }
+        }
+        else
+        {
+            await ReplyAsync("Error: Insufficient rights. Only FMBot owners can stop timer.");
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+        }
+    }
+
+    [Command("updatediscordsupporter")]
+    [Summary("Updates single discord supporter")]
+    public async Task UpdateSingleDiscordSupporters([Remainder] string user)
+    {
+        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            try
+            {
+                var userToUpdate = await this._settingService.GetDifferentUser(user);
+
+                if (userToUpdate == null)
+                {
+                    await ReplyAsync("User not found. Are you sure they are registered in .fmbot?");
+                    this.Context.LogCommandUsed(CommandResponse.NotFound);
+                    return;
+                }
+
+                await this._supporterService.UpdateSingleDiscordSupporter(userToUpdate.DiscordUserId);
+                await ReplyAsync("Updated single discord supporter");
+            }
+            catch (Exception e)
+            {
+                await this.Context.HandleCommandException(e);
+            }
+        }
+        else
+        {
+            await ReplyAsync("Error: Insufficient rights. Only FMBot owners can stop timer.");
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+        }
+    }
+
     [Command("refreshpremiumservers")]
     [Summary("Refreshes cached premium servers")]
     public async Task RefreshPremiumGuilds()
@@ -1463,7 +1872,7 @@ public class AdminCommands : BaseCommandModule
 
     [Command("runtimer")]
     [Summary("Run a timer manually (only works if it exists)")]
-    [Alias("triggerjob")]
+    [Alias("triggerjob", "runjob")]
     public async Task RunTimerAsync([Remainder] string job = null)
     {
         if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
@@ -1477,20 +1886,26 @@ public class AdminCommands : BaseCommandModule
                     return;
                 }
 
-                job = job.ToLower();
+                if (job == "masterjobs")
+                {
+                    this._timer.QueueMasterJobs();
+                    await ReplyAsync("Added masterjobs");
+                    return;
+                }
 
                 var recurringJobs = JobStorage.Current.GetConnection().GetRecurringJobs();
-                var jobIds = recurringJobs.Select(s => s.Id);
 
-                if (jobIds.All(a => a.ToLower() != job))
+                var jobToRun = recurringJobs.FirstOrDefault(f => f.Id.ToLower() == job.ToLower());
+
+                if (jobToRun == null)
                 {
                     await ReplyAsync("Could not find job you're looking for. Check `.timerstatus` for available jobs.");
                     this.Context.LogCommandUsed(CommandResponse.WrongInput);
                     return;
                 }
 
-                RecurringJob.TriggerJob(job);
-                await ReplyAsync($"Triggered job {job}", allowedMentions: AllowedMentions.None);
+                RecurringJob.TriggerJob(jobToRun.Id);
+                await ReplyAsync($"Triggered job {jobToRun.Id}", allowedMentions: AllowedMentions.None);
 
                 this.Context.LogCommandUsed();
             }
@@ -1579,39 +1994,39 @@ public class AdminCommands : BaseCommandModule
         }
     }
 
-    [Command("globalblacklistadd")]
-    [Summary("Adds a user to the global FMBot blacklist.")]
-    [Alias("globalblocklistadd")]
-    public async Task BlacklistAddAsync(SocketGuildUser user = null)
+    [Command("globalblockadd")]
+    [Summary("Blocks a user from using .fmbot.")]
+    [Alias("globalblocklistadd", "globalblacklistadd")]
+    public async Task BlacklistAddAsync(ulong? user = null)
     {
         try
         {
             if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
             {
-                if (user == null)
+                if (!user.HasValue)
                 {
-                    await ReplyAsync("Please specify what user you want to add to the blacklist.");
+                    await ReplyAsync("Please specify what discord user id you want to block from using .fmbot.");
                     this.Context.LogCommandUsed(CommandResponse.WrongInput);
                     return;
                 }
 
-                if (user == this.Context.Message.Author)
+                if (user == this.Context.Message.Author.Id)
                 {
-                    await ReplyAsync("You cannot blacklist yourself!");
+                    await ReplyAsync("You cannot block yourself from using .fmbot!");
                     this.Context.LogCommandUsed(CommandResponse.WrongInput);
                     return;
                 }
 
-                var blacklistResult = await this._adminService.AddUserToBlocklistAsync(user.Id);
+                var blacklistResult = await this._adminService.AddUserToBlocklistAsync(user.Value);
 
                 if (blacklistResult)
                 {
-                    await ReplyAsync("Added " + user.Username + " to the blacklist.", allowedMentions: AllowedMentions.None);
+                    await ReplyAsync("Blocked " + user + " from using .fmbot.", allowedMentions: AllowedMentions.None);
                 }
                 else
                 {
-                    await ReplyAsync("You have already added " + user.Username +
-                                     " to the blacklist or the blacklist does not exist for this user.", allowedMentions: AllowedMentions.None);
+                    await ReplyAsync("You have already added " + user +
+                                     " to the list of blocked users or something went wrong.", allowedMentions: AllowedMentions.None);
                 }
 
                 this.Context.LogCommandUsed();
@@ -1628,31 +2043,31 @@ public class AdminCommands : BaseCommandModule
         }
     }
 
-    [Command("globalblacklistremove")]
-    [Summary("Removes a user from the global FMBot blacklist.")]
-    [Alias("globalblocklistremove")]
-    public async Task BlackListRemoveAsync(SocketGuildUser user = null)
+    [Command("globalblockremove")]
+    [Summary("Unblocks a user so they can use .fmbot again.")]
+    [Alias("globalblocklistremove", "globalblacklistremove")]
+    public async Task BlackListRemoveAsync(ulong? user = null)
     {
         try
         {
             if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
             {
-                if (user == null)
+                if (!user.HasValue)
                 {
-                    await ReplyAsync("Please specify what user you want to remove from the blacklist.");
+                    await ReplyAsync("Please specify what user you want to remove from the list of users who are blocked from using .fmbot.");
                     this.Context.LogCommandUsed(CommandResponse.WrongInput);
                     return;
                 }
 
-                var blacklistResult = await this._adminService.RemoveUserFromBlocklistAsync(user.Id);
+                var blacklistResult = await this._adminService.RemoveUserFromBlocklistAsync(user.Value);
 
                 if (blacklistResult)
                 {
-                    await ReplyAsync("Removed " + user.Username + " from the blacklist.", allowedMentions: AllowedMentions.None);
+                    await ReplyAsync("Removed " + user + " from the list of users who are blocked from using .fmbot.", allowedMentions: AllowedMentions.None);
                 }
                 else
                 {
-                    await ReplyAsync("You have already removed " + user.Username + " from the blacklist.", allowedMentions: AllowedMentions.None);
+                    await ReplyAsync("You have already removed " + user + " from the list of users who are blocked from using the bot.", allowedMentions: AllowedMentions.None);
                 }
                 this.Context.LogCommandUsed();
             }
@@ -1669,7 +2084,7 @@ public class AdminCommands : BaseCommandModule
     }
 
     [Command("runfullupdate")]
-    [Summary("Runs a full update for someone esle")]
+    [Summary("Runs a full update for someone else")]
     public async Task RunFullUpdate([Remainder] string user = null)
     {
         try
@@ -1695,6 +2110,236 @@ public class AdminCommands : BaseCommandModule
                 await ReplyAsync("You are not authorized to use this command.");
                 this.Context.LogCommandUsed(CommandResponse.NoPermission);
             }
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [Command("runtoplistupdate")]
+    [Summary("Runs a toplist update for someone else")]
+    public async Task RunTopListUpdate([Remainder] string user = null)
+    {
+        try
+        {
+            if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+            {
+                var userToUpdate = await this._settingService.GetDifferentUser(user);
+
+                if (userToUpdate == null)
+                {
+                    await ReplyAsync("User not found. Are you sure they are registered in .fmbot?");
+                    this.Context.LogCommandUsed(CommandResponse.NotFound);
+                    return;
+                }
+
+                await ReplyAsync($"Running top list update for '{userToUpdate.UserNameLastFM}'", allowedMentions: AllowedMentions.None);
+                this.Context.LogCommandUsed();
+
+                await this._indexService.RecalculateTopLists(userToUpdate);
+            }
+            else
+            {
+                await ReplyAsync("You are not authorized to use this command.");
+                this.Context.LogCommandUsed(CommandResponse.NoPermission);
+            }
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [Command("importdebug")]
+    [Summary("Debug your import playcount")]
+    [Options("Artist name")]
+    public async Task ImportDebug([Remainder] string user = null)
+    {
+        try
+        {
+            _ = this.Context.Channel.TriggerTypingAsync();
+
+            var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+            var userSettings = await this._settingService.GetUser(user, contextUser, this.Context);
+
+            if (!SupporterService.IsSupporter(userSettings.UserType))
+            {
+                await ReplyAsync("You can only debug imports for supporters.");
+                this.Context.LogCommandUsed(CommandResponse.SupporterRequired);
+                return;
+            }
+
+            var dbUser = await this._settingService.GetDifferentUser(userSettings.DiscordUserId.ToString());
+
+            if (dbUser == null)
+            {
+                await ReplyAsync("User not found. Are you sure they are registered in .fmbot?");
+                this.Context.LogCommandUsed(CommandResponse.NotFound);
+                return;
+            }
+
+            var allPlays = await this._playService.GetAllUserPlays(dbUser.UserId, false);
+            var allFinalizedPlays = await this._playService.GetAllUserPlays(dbUser.UserId, true);
+
+            var description = new StringBuilder();
+
+            string artistName = null;
+            if (!string.IsNullOrWhiteSpace(userSettings.NewSearchValue))
+            {
+                description.AppendLine($"Filtering to artist `{userSettings.NewSearchValue}`");
+                description.AppendLine();
+                artistName = userSettings.NewSearchValue;
+            }
+
+            if (dbUser.UserType != UserType.User)
+            {
+                description.AppendLine($"**{StringExtensions.Sanitize(userSettings.DisplayName)} {dbUser.UserType.UserTypeToIcon()}**");
+            }
+            if (dbUser.DataSource != DataSource.LastFm)
+            {
+                var name = dbUser.DataSource.GetAttribute<OptionAttribute>().Name;
+
+                switch (dbUser.DataSource)
+                {
+                    case DataSource.FullSpotifyThenLastFm:
+                    case DataSource.SpotifyThenFullLastFm:
+                        description.AppendLine($"Imported: {name}");
+                        break;
+                    case DataSource.LastFm:
+                    default:
+                        break;
+                }
+
+                description.AppendLine();
+
+                var firstImportPlay = allPlays
+                    .OrderBy(o => o.TimePlayed)
+                    .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault(w => w.PlaySource != PlaySource.LastFm);
+                if (firstImportPlay != null)
+                {
+                    var dateValue = ((DateTimeOffset)firstImportPlay.TimePlayed).ToUnixTimeSeconds();
+                    description.AppendLine($"First imported play: <t:{dateValue}:F>");
+                }
+
+                description.AppendLine($"Imported play count: `{allPlays
+                    .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase)).Count(w => w.PlaySource != PlaySource.LastFm)}`");
+
+                var lastImportPlay = allPlays
+                    .OrderByDescending(o => o.TimePlayed)
+                    .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault(w => w.PlaySource != PlaySource.LastFm);
+                if (lastImportPlay != null)
+                {
+                    var dateValue = ((DateTimeOffset)lastImportPlay.TimePlayed).ToUnixTimeSeconds();
+                    description.AppendLine($"Last imported play: <t:{dateValue}:F>");
+                }
+
+                description.AppendLine();
+                var firstFinalizedImportPlay = allFinalizedPlays
+                    .OrderBy(o => o.TimePlayed)
+                    .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault(w => w.PlaySource != PlaySource.LastFm);
+                if (firstFinalizedImportPlay != null)
+                {
+                    var dateValue = ((DateTimeOffset)firstFinalizedImportPlay.TimePlayed).ToUnixTimeSeconds();
+                    description.AppendLine($"First imported play after filtering: <t:{dateValue}:F>");
+                }
+
+                description.AppendLine($"Imported play count after filtering: `{allFinalizedPlays
+                    .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase)).Count(w => w.PlaySource != PlaySource.LastFm)}`");
+
+                var lastFinalizedImportPlay = allFinalizedPlays
+                    .OrderByDescending(o => o.TimePlayed)
+                    .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault(w => w.PlaySource != PlaySource.LastFm);
+                if (lastFinalizedImportPlay != null)
+                {
+                    var dateValue = ((DateTimeOffset)lastFinalizedImportPlay.TimePlayed).ToUnixTimeSeconds();
+                    description.AppendLine($"Last imported play after filtering: <t:{dateValue}:F>");
+                }
+
+                description.AppendLine();
+            }
+
+            var firstLfmPlay = allPlays
+                .OrderBy(o => o.TimePlayed)
+                .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault(w => w.PlaySource == PlaySource.LastFm);
+            if (firstLfmPlay != null)
+            {
+                var dateValue = ((DateTimeOffset)firstLfmPlay.TimePlayed).ToUnixTimeSeconds();
+                description.AppendLine($"First Last.fm play: <t:{dateValue}:F>");
+            }
+
+            description.AppendLine($"Last.fm play count: `{allPlays
+                .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase)).Count(w => w.PlaySource == PlaySource.LastFm)}`");
+
+            var lastLfmPlay = allPlays
+                .OrderByDescending(o => o.TimePlayed)
+                .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault(w => w.PlaySource == PlaySource.LastFm);
+            if (lastLfmPlay != null)
+            {
+                var dateValue = ((DateTimeOffset)lastLfmPlay.TimePlayed).ToUnixTimeSeconds();
+                description.AppendLine($"Last Last.fm play: <t:{dateValue}:F>");
+            }
+
+            description.AppendLine();
+
+            var firstFilteredLfmPlay = allFinalizedPlays
+                .OrderBy(o => o.TimePlayed)
+                .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault(w => w.PlaySource == PlaySource.LastFm);
+            if (firstFilteredLfmPlay != null)
+            {
+                var dateValue = ((DateTimeOffset)firstFilteredLfmPlay.TimePlayed).ToUnixTimeSeconds();
+                description.AppendLine($"First Last.fm play after filtering: <t:{dateValue}:F>");
+            }
+
+            description.AppendLine($"Last.fm play count after filtering: `{allFinalizedPlays
+                .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase)).Count(w => w.PlaySource == PlaySource.LastFm)}`");
+
+            var lastFilteredLfmPlay = allFinalizedPlays
+                .OrderByDescending(o => o.TimePlayed)
+                .Where(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault(w => w.PlaySource == PlaySource.LastFm);
+            if (lastFilteredLfmPlay != null)
+            {
+                var dateValue = ((DateTimeOffset)lastFilteredLfmPlay.TimePlayed).ToUnixTimeSeconds();
+                description.AppendLine($"Last Last.fm play after filtering: <t:{dateValue}:F>");
+            }
+
+            description.AppendLine();
+
+            var firstFilteredPlay = allFinalizedPlays
+                .OrderBy(o => o.TimePlayed)
+                .FirstOrDefault(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase));
+            if (firstFilteredPlay != null)
+            {
+                var dateValue = ((DateTimeOffset)firstFilteredPlay.TimePlayed).ToUnixTimeSeconds();
+                description.AppendLine($"Final first play: <t:{dateValue}:F>");
+            }
+
+            description.AppendLine($"Final play count: `{allFinalizedPlays.Count(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase))}`");
+
+            var lastFilteredPlay = allFinalizedPlays
+                .OrderByDescending(o => o.TimePlayed)
+                .FirstOrDefault(w => artistName == null || string.Equals(artistName, w.ArtistName, StringComparison.OrdinalIgnoreCase));
+            if (lastFilteredPlay != null)
+            {
+                var dateValue = ((DateTimeOffset)lastFilteredPlay.TimePlayed).ToUnixTimeSeconds();
+                description.AppendLine($"Final last play: <t:{dateValue}:F>");
+            }
+
+            this._embed.WithDescription(description.ToString());
+            this._embed.WithFooter("Import debug");
+
+            await ReplyAsync(embed: this._embed.Build());
+
+            this.Context.LogCommandUsed();
         }
         catch (Exception e)
         {

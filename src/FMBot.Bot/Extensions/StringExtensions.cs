@@ -63,6 +63,12 @@ public static class StringExtensions
 
         return trackName;
     }
+    public static long ToUnixEpochDate(this DateTime @this)
+    {
+        DateTimeOffset dateTimeOffset = new(@this);
+        dateTimeOffset = dateTimeOffset.ToUniversalTime();
+        return dateTimeOffset.ToUnixTimeSeconds();
+    }
 
     private static readonly string[] SensitiveCharacters = {
         "\\",
@@ -209,6 +215,11 @@ public static class StringExtensions
     public static string GetRolesString(long? roles)
     {
         return roles == 1 ? "role" : "roles";
+    }
+
+    public static string GetItemsString(long? items)
+    {
+        return items == 1 ? "item" : "items";
     }
 
     public static string GetChangeString(decimal oldValue, decimal newValue)
@@ -427,6 +438,17 @@ public static class StringExtensions
             else if (existingOption == null)
             {
                 currentList.Add(optionToAdd);
+            }
+        }
+    }
+
+    public static void ReplaceOrAddToDictionary(this Dictionary<string, string> currentDictionary, Dictionary<string, string> optionsToAdd)
+    {
+        foreach (var optionToAdd in optionsToAdd)
+        {
+            if (!currentDictionary.TryGetValue(optionToAdd.Key, out _))
+            {
+                currentDictionary.Add(optionToAdd.Key, optionToAdd.Value);
             }
         }
     }
