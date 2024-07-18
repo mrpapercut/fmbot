@@ -222,6 +222,21 @@ public static class StringExtensions
         return items == 1 ? "item" : "items";
     }
 
+    public static string GetTimesString(long? times)
+    {
+        return times == 1 ? "time" : "times";
+    }
+
+    public static string GetHintsString(long? hints)
+    {
+        return hints == 1 ? "hint" : "hints";
+    }
+    
+    public static string GetGamesString(long? games)
+    {
+        return games == 1 ? "game" : "games";
+    }
+
     public static string GetChangeString(decimal oldValue, decimal newValue)
     {
         if (oldValue < newValue)
@@ -229,6 +244,17 @@ public static class StringExtensions
             return "Up from";
         }
         return oldValue > newValue ? "Down from" : "From";
+    }
+
+    public static string GetTrackLength(long trackLength)
+    {
+        return GetTrackLength(TimeSpan.FromMilliseconds(trackLength));
+    }
+
+    public static string GetTrackLength(TimeSpan trackLength)
+    {
+        return
+            $"{(trackLength.Hours == 0 ? "" : $"{trackLength.Hours}:")}{trackLength.Minutes}:{trackLength.Seconds:D2}";
     }
 
     public static string GetListeningTimeString(TimeSpan timeSpan, bool includeSeconds = false)
@@ -312,13 +338,12 @@ public static class StringExtensions
 
     public static string GetRymUrl(string albumName, string artistName)
     {
-        var albumQueryName = albumName.Replace(" - Single", "");
-        albumQueryName = albumQueryName.Replace(" - EP", "");
+        var albumRymUrl = new StringBuilder();
+        albumRymUrl.Append(@"https://rateyourmusic.com/search?searchterm=");
+        albumRymUrl.Append(HttpUtility.UrlEncode($"{artistName} {albumName.Replace("- Single", "").Replace("- EP", "").TrimEnd()}"));
+        albumRymUrl.Append($"&searchtype=l");
 
-        var albumRymUrl = @"https://duckduckgo.com/?q=%5Csite%3Arateyourmusic.com";
-        albumRymUrl += HttpUtility.UrlEncode($" \"{albumQueryName}\" \"{artistName}\"");
-
-        return albumRymUrl;
+        return albumRymUrl.ToString();
     }
 
     public static string GetAmountEnd(long amount)
@@ -451,5 +476,21 @@ public static class StringExtensions
                 currentDictionary.Add(optionToAdd.Key, optionToAdd.Value);
             }
         }
+    }
+
+    public static string RemoveEditionSuffix(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return input;
+        }
+
+        const string pattern = @"\s*\(((?:[^)]+\s+)?(edition|version|remastered|remaster|remix|mix))\)\s*$";
+        input = Regex.Replace(input, pattern, "", RegexOptions.IgnoreCase).TrimEnd();
+
+        const string kpopPattern = @"\s*-\s*(The \d+(st|nd|rd|th) (Mini )?Album( Repackage)?)\s*$";
+        input = Regex.Replace(input, kpopPattern, "", RegexOptions.IgnoreCase);
+
+        return input.Trim();
     }
 }

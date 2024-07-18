@@ -6,13 +6,11 @@ using System.Threading.Tasks;
 using Discord;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Models;
-using FMBot.Domain;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using Microsoft.EntityFrameworkCore;
-using static SpotifyAPI.Web.PlaylistRemoveItemsRequest;
 
 namespace FMBot.Bot.Services.WhoKnows;
 
@@ -251,7 +249,7 @@ public class WhoKnowsService
         }
         if (context.ContextUser.PrivacyLevel != PrivacyLevel.Global)
         {
-            footer.AppendLine($"You are currently not globally visible - use '{context.Prefix}privacy' to enable.");
+            footer.AppendLine($"You're currently not globally visible - use '{context.Prefix}privacy' to enable.");
         }
         if (settings.HidePrivateUsers)
         {
@@ -325,7 +323,7 @@ public class WhoKnowsService
                 nameWithLink = NameWithLink(user);
                 if (user.UserId == requestedUserId)
                 {
-                    nameWithLink = $"**{nameWithLink}**";
+                    nameWithLink = $"**{nameWithLink}";
                 }
             }
 
@@ -345,7 +343,15 @@ public class WhoKnowsService
 
             reply.Append($"{positionCounter}{afterPositionSpacer}{nameWithLink}");
 
-            reply.Append($" - **{user.Playcount}** {playString}\n");
+            if (user.UserId == requestedUserId)
+            {
+                reply.Append($" - {user.Playcount} {playString}**\n");
+
+            }
+            else
+            {
+                reply.Append($" - **{user.Playcount}** {playString}\n");
+            }
 
             indexNumber += 1;
             timesNameAdded += 1;
@@ -366,9 +372,9 @@ public class WhoKnowsService
                 var nameWithLink = NameWithLink(requestedUser);
                 var playString = StringExtensions.GetPlaysString(requestedUser.Playcount);
 
-                reply.Append($"**{spacer}{whoKnowsObjects.IndexOf(requestedUser) + 1}.  {nameWithLink}** ");
+                reply.Append($"**{spacer}{whoKnowsObjects.IndexOf(requestedUser) + 1}.  {nameWithLink} ");
 
-                reply.Append($" - **{requestedUser.Playcount}** {playString}\n");
+                reply.Append($" - {requestedUser.Playcount} {playString}**\n");
             }
         }
 

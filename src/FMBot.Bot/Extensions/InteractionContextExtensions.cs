@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
@@ -94,7 +95,21 @@ public static class InteractionContextExtensions
                 await context.Interaction.RespondAsync(response.Text, allowedMentions: AllowedMentions.None, ephemeral: ephemeral, components: response.Components?.Build());
                 break;
             case ResponseType.Embed:
-                await context.Interaction.RespondAsync(null, new[] { response.Embed.Build() }, ephemeral: ephemeral, components: response.Components?.Build());
+                await context.Interaction.RespondAsync(null, new[] { response.Embed.Build() },
+                    ephemeral: ephemeral, components: response.Components?.Build());
+                break;
+            case ResponseType.ImageWithEmbed:
+                var imageEmbedFilename = StringExtensions.TruncateLongString(StringExtensions.ReplaceInvalidChars(response.FileName), 60);
+                await context.Interaction.RespondWithFileAsync(response.Stream,
+                    (response.Spoiler
+                        ? "SPOILER_"
+                        : "") +
+                    imageEmbedFilename +
+                    ".png",
+                    null,
+                    new[] { response.Embed?.Build() },
+                    ephemeral: ephemeral,
+                    components: response.Components?.Build());
                 break;
             case ResponseType.Paginator:
                 _ = interactiveService.SendPaginatorAsync(
@@ -109,17 +124,26 @@ public static class InteractionContextExtensions
             default:
                 throw new ArgumentOutOfRangeException();
         }
+
+        if (response.HintShown == true && !PublicProperties.UsedCommandsHintShown.Contains(context.Interaction.Id))
+        {
+            PublicProperties.UsedCommandsHintShown.Add(context.Interaction.Id);
+        }
     }
 
     public static async Task SendFollowUpResponse(this IInteractionContext context, InteractiveService interactiveService, ResponseModel response, bool ephemeral = false)
     {
+        ulong? responseId = null;
+        
         switch (response.ResponseType)
         {
             case ResponseType.Text:
-                await context.Interaction.FollowupAsync(response.Text, allowedMentions: AllowedMentions.None, ephemeral: ephemeral, components: response.Components?.Build());
+                var text = await context.Interaction.FollowupAsync(response.Text, allowedMentions: AllowedMentions.None, ephemeral: ephemeral, components: response.Components?.Build());
+                responseId = text.Id;
                 break;
             case ResponseType.Embed:
-                await context.Interaction.FollowupAsync(null, new[] { response.Embed.Build() }, ephemeral: ephemeral, components: response.Components?.Build());
+                var embed = await context.Interaction.FollowupAsync(null, new[] { response.Embed.Build() }, ephemeral: ephemeral, components: response.Components?.Build());
+                responseId = embed.Id;
                 break;
             case ResponseType.Paginator:
                 _ = interactiveService.SendPaginatorAsync(
@@ -131,21 +155,23 @@ public static class InteractionContextExtensions
                 break;
             case ResponseType.ImageWithEmbed:
                 var imageEmbedFilename = StringExtensions.TruncateLongString(StringExtensions.ReplaceInvalidChars(response.FileName), 60);
-                await context.Interaction.FollowupWithFileAsync(response.Stream,
+                var imageWithEmbed = await context.Interaction.FollowupWithFileAsync(response.Stream,
                     (response.Spoiler
                         ? "SPOILER_"
                         : "") +
                     imageEmbedFilename +
                     ".png",
                     null,
-                    new[] { response.Embed.Build() },
+                    new[] { response.Embed?.Build() },
                     ephemeral: ephemeral,
                     components: response.Components?.Build());
+
                 await response.Stream.DisposeAsync();
+                responseId = imageWithEmbed.Id;
                 break;
             case ResponseType.ImageOnly:
                 var imageName = StringExtensions.TruncateLongString(StringExtensions.ReplaceInvalidChars(response.FileName), 60);
-                await context.Interaction.FollowupWithFileAsync(response.Stream,
+                var image = await context.Interaction.FollowupWithFileAsync(response.Stream,
                 (response.Spoiler
                     ? "SPOILER_"
                     : "") +
@@ -153,10 +179,23 @@ public static class InteractionContextExtensions
                 ".png",
                 null,
                 ephemeral: ephemeral);
+
                 await response.Stream.DisposeAsync();
+                responseId = image.Id;
                 break;
             default:
                 throw new ArgumentOutOfRangeException();
+        }
+
+        if (responseId.HasValue)
+        {
+            PublicProperties.UsedCommandsResponseMessageId.TryAdd(context.Interaction.Id, responseId.Value);
+            PublicProperties.UsedCommandsResponseContextId.TryAdd(responseId.Value, context.Interaction.Id);
+        }
+
+        if (response.HintShown == true && !PublicProperties.UsedCommandsHintShown.Contains(context.Interaction.Id))
+        {
+            PublicProperties.UsedCommandsHintShown.Add(context.Interaction.Id);
         }
     }
 
@@ -171,6 +210,11 @@ public static class InteractionContextExtensions
 
         if (response.ResponseType == ResponseType.Paginator)
         {
+            if (defer)
+            {
+                await context.Interaction.DeferAsync();
+            }
+
             await context.ModifyPaginator(interactiveService, message, response);
             return;
         }
@@ -202,6 +246,31 @@ public static class InteractionContextExtensions
 
         await message.ModifyAsync(m => m.Components = newComponents.Build());
     }
+    
+    public static async Task EnableInteractionButtons(this IInteractionContext context)
+    {
+        var message = (context.Interaction as SocketMessageComponent)?.Message;
+
+        if (message == null)
+        {
+            return;
+        }
+
+        var newComponents = new ComponentBuilder();
+        foreach (var actionRowComponent in message.Components)
+        {
+            foreach (var component in actionRowComponent.Components)
+            {
+                if (component is ButtonComponent buttonComponent)
+                {
+                    newComponents.WithButton(buttonComponent.Label, buttonComponent.CustomId, buttonComponent.Style,
+                        buttonComponent.Emote, buttonComponent.Url);
+                }
+            }
+        }
+
+        await message.ModifyAsync(m => m.Components = newComponents.Build());
+    }
 
     public static async Task UpdateMessageEmbed(this IInteractionContext context, ResponseModel response, string messageId)
     {
@@ -225,7 +294,7 @@ public static class InteractionContextExtensions
             m.Embed = response.Embed?.Build();
             m.Attachments = response.Stream != null ? new Optional<IEnumerable<FileAttachment>>(new List<FileAttachment>
             {
-                new(response.Stream, "image.png")
+                new(response.Stream, response.Spoiler ? $"SPOILER_{response.FileName}.png" : $"{response.FileName}.png")
             }) : null;
         });
 
@@ -235,11 +304,12 @@ public static class InteractionContextExtensions
         }
     }
 
-    private static async Task ModifyPaginator(this IInteractionContext context, InteractiveService interactiveService, IUserMessage message, ResponseModel response)
+    private static Task ModifyPaginator(this IInteractionContext context, InteractiveService interactiveService, IUserMessage message, ResponseModel response)
     {
         _ = interactiveService.SendPaginatorAsync(
             response.StaticPaginator,
             message,
             TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds));
+        return Task.CompletedTask;
     }
 }

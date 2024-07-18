@@ -45,7 +45,11 @@ public static class InteractionConstants
 
     public const string ImportManage = "user-import-manage";
     public const string ImportSetting = "user-import-setting";
-    public const string ImportClear = "user-import-clear";
+    public const string ImportClearSpotify = "user-import-clear-spotify";
+    public const string ImportClearAppleMusic = "user-import-clear-applemusic";
+
+    public const string ImportInstructionsSpotify = "import-spotify-instructions";
+    public const string ImportInstructionsAppleMusic = "import-applemusic-instructions";
 
     public const string DeleteStreak = "user-streak-delete";
     public const string DeleteStreakModal = "user-streak-delete-modal";
@@ -66,6 +70,7 @@ public static class InteractionConstants
     {
         public const string Profile = "user-profile";
         public const string History = "user-history";
+        public const string CrownSelectMenu = "user-crownpicker";
     }
 
     public static class Album
@@ -73,7 +78,10 @@ public static class InteractionConstants
         public const string Info = "album-info";
         public const string Tracks = "album-tracks";
         public const string Cover = "album-cover";
+        public const string RandomCover = "randomalbum-cover";
     }
+
+    public const string RandomMilestone = "random-milestone";
 
     public static class ModerationCommands
     {
@@ -89,6 +97,14 @@ public static class InteractionConstants
 
         public const string ReportAlbum = "report-album";
         public const string ReportAlbumModal = "report-album-modal";
+        
+        public const string MoveUserData = "move-user-data-*-*";
+    }
+
+    public static class SupporterLinks
+    {
+        public const string GetPurchaseLink = "supporter-purchase-link";
+        public const string GetManageLink = "supporter-manage-link";
     }
 
     public const string BotScrobblingEnable = "user-setting-botscrobbling-enable";
@@ -139,8 +155,23 @@ public static class InteractionConstants
     public const string WhoKnowsAlbumRolePicker = "whoknows-album-role-picker";
     public const string WhoKnowsTrackRolePicker = "whoknows-track-role-picker";
 
-    public const string GenreGuild = "genre-guild";
-    public const string GenreUser = "genre-user";
+    public static class Genre
+    {
+        public const string GenreGuild = "genre-guild";
+        public const string GenreUser = "genre-user";
+        
+        public const string GenreSelectMenu = "genre-picker";
+    }
 
     public const string GuildMembers = "guild-members";
+    public const string FeaturedLog = "featured-log";
+
+    public static class Game
+    {
+        public const string AddJumbleHint = "jumble-addhint";
+        public const string JumbleUnblur = "jumble-unblur";
+        public const string JumbleGiveUp = "jumble-giveup";
+        public const string JumbleReshuffle = "jumble-reshuffle";
+        public const string JumblePlayAgain = "jumble-playagain";
+    }
 }

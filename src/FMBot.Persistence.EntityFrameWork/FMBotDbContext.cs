@@ -1,4 +1,5 @@
 using System;
+using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -24,6 +25,7 @@ namespace FMBot.Persistence.EntityFrameWork
         public virtual DbSet<BottedUser> BottedUsers { get; set; }
         public virtual DbSet<GlobalFilteredUser> GlobalFilteredUsers { get; set; }
         public virtual DbSet<InactiveUsers> InactiveUsers { get; set; }
+        public virtual DbSet<InactiveUserLog> InactiveUserLog { get; set; }
         public virtual DbSet<BottedUserReport> BottedUserReport { get; set; }
         public virtual DbSet<CensoredMusicReport> CensoredMusicReport { get; set; }
 
@@ -39,10 +41,16 @@ namespace FMBot.Persistence.EntityFrameWork
         public virtual DbSet<Artist> Artists { get; set; }
         public virtual DbSet<Album> Albums { get; set; }
         public virtual DbSet<Track> Tracks { get; set; }
+        
+        public virtual DbSet<ArtistImage> ArtistImages { get; set; }
+        public virtual DbSet<AlbumImage> AlbumImages { get; set; }
 
         public virtual DbSet<CensoredMusic> CensoredMusic { get; set; }
         public virtual DbSet<FeaturedLog> FeaturedLogs { get; set; }
         public virtual DbSet<AiPrompt> AiPrompts { get; set; }
+        
+        public virtual DbSet<JumbleSession> JumbleSessions { get; set; }
+        public virtual DbSet<JumbleSessionAnswer> JumbleSessionAnswers { get; set; }
 
         public virtual DbSet<ArtistGenre> ArtistGenres { get; set; }
         public virtual DbSet<ArtistAlias> ArtistAliases { get; set; }
@@ -62,7 +70,7 @@ namespace FMBot.Persistence.EntityFrameWork
                 optionsBuilder.UseNpgsql(this._configuration["Database:ConnectionString"]);
 
                 // Uncomment below connection string when creating migrations, and also comment out the above iconfiguration stuff
-                //optionsBuilder.UseNpgsql("Host=localhost;Port=5435;Username=postgres;Password=password;Database=fmbot;Command Timeout=60;Timeout=60;Persist Security Info=True");
+                //optionsBuilder.UseNpgsql("Host=localhost;Port=5435;Username=postgres;Password=password;Database=fmbot-restore-2;Command Timeout=60;Timeout=60;Persist Security Info=True");
 
                 optionsBuilder.UseSnakeCaseNamingConvention();
             }
@@ -311,6 +319,32 @@ namespace FMBot.Persistence.EntityFrameWork
                     .OnDelete(DeleteBehavior.Cascade);
             });
 
+            modelBuilder.Entity<JumbleSession>(entity =>
+            {
+                entity.HasKey(e => e.JumbleSessionId);
+            });
+
+            modelBuilder.Entity<JumbleSessionAnswer>(entity =>
+            {
+                entity.HasKey(e => e.JumbleSessionAnswerId);
+
+                entity.HasOne(u => u.JumbleSession)
+                    .WithMany(a => a.Answers)
+                    .HasForeignKey(f => f.JumbleSessionId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+
+            modelBuilder.Entity<JumbleSessionHint>(entity =>
+            {
+                entity.HasKey(e => e.JumbleSessionHintId);
+
+                entity.HasOne(u => u.JumbleSession)
+                    .WithMany(a => a.Hints)
+                    .HasForeignKey(f => f.JumbleSessionId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
             modelBuilder.Entity<UserInteraction>(entity =>
             {
                 entity.HasKey(e => e.Id);
@@ -359,6 +393,10 @@ namespace FMBot.Persistence.EntityFrameWork
 
                 entity.Property(e => e.Name)
                     .HasColumnType("citext");
+
+                entity.HasMany(h => h.Images)
+                    .WithOne(o => o.Artist)
+                    .HasForeignKey(k => k.ArtistId);
             });
 
             modelBuilder.Entity<Album>(entity =>
@@ -374,6 +412,10 @@ namespace FMBot.Persistence.EntityFrameWork
                 entity.HasOne(d => d.Artist)
                     .WithMany(p => p.Albums)
                     .HasForeignKey(d => d.ArtistId);
+
+                entity.HasMany(h => h.Images)
+                    .WithOne(o => o.Album)
+                    .HasForeignKey(k => k.AlbumId);
             });
 
             modelBuilder.Entity<Track>(entity =>

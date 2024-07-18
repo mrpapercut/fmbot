@@ -47,30 +47,12 @@ public class WhoKnowsAlbumDto
 
     public string UserNameLastFm { get; set; }
 
-    public string Name { get; set; }
-
-    public string ArtistName { get; set; }
-
     public int Playcount { get; set; }
-}
-
-public class AlbumCoverDto
-{
-    public string LastfmImageUrl { get; set; }
-
-    public string SpotifyImageUrl { get; set; }
-
-    public string AlbumName { get; set; }
-    public string ArtistName { get; set; }
 }
 
 public class WhoKnowsGlobalAlbumDto
 {
     public int UserId { get; set; }
-
-    public string Name { get; set; }
-
-    public string ArtistName { get; set; }
 
     public int Playcount { get; set; }
 

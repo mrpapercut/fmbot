@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Discord.Commands;
 using Fergun.Interactive;
@@ -15,14 +14,12 @@ using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
-using FMBot.Bot.Services.ThirdParty;
 using FMBot.Domain;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Domain.Types;
 using FMBot.LastFM.Repositories;
-using Google.Apis.Discovery;
 using Microsoft.Extensions.Options;
 using TimePeriod = FMBot.Domain.Models.TimePeriod;
 
@@ -39,8 +36,7 @@ public class TrackCommands : BaseCommandModule
     private readonly UserService _userService;
     private readonly TrackService _trackService;
     private readonly TrackBuilders _trackBuilders;
-    private readonly DiscogsService _discogsService;
-    private readonly TimeService _timeService;
+    private readonly EurovisionBuilders _eurovisionBuilders;
 
     private InteractiveService Interactivity { get; }
 
@@ -56,8 +52,7 @@ public class TrackCommands : BaseCommandModule
         IOptions<BotSettings> botSettings,
         TrackService trackService,
         TrackBuilders trackBuilders,
-        DiscogsService discogsService,
-        TimeService timeService) : base(botSettings)
+        EurovisionBuilders eurovisionBuilders) : base(botSettings)
     {
         this._guildService = guildService;
         this._indexService = indexService;
@@ -68,8 +63,7 @@ public class TrackCommands : BaseCommandModule
         this.Interactivity = interactivity;
         this._trackService = trackService;
         this._trackBuilders = trackBuilders;
-        this._discogsService = discogsService;
-        this._timeService = timeService;
+        this._eurovisionBuilders = eurovisionBuilders;
     }
 
     [Command("track", RunMode = RunMode.Async)]
@@ -129,7 +123,7 @@ public class TrackCommands : BaseCommandModule
     }
 
     [Command("trackdetails", RunMode = RunMode.Async)]
-    [Summary("Shows metadata for current track or the one you're searching for." )]
+    [Summary("Shows metadata for current track or the one you're searching for.")]
     [Examples(
         "tp",
         "trackdetails",
@@ -151,7 +145,7 @@ public class TrackCommands : BaseCommandModule
     }
 
     [Command("love", RunMode = RunMode.Async)]
-    [Discord.Commands.Summary("Loves a track on Last.fm")]
+    [Summary("Loves a track on Last.fm")]
     [Examples("love", "l", "love Tame Impala Borderline")]
     [Alias("l", "heart", "favorite", "affection", "appreciation", "lust", "fuckyeah", "fukk", "unfuck")]
     [UserSessionRequired]
@@ -170,7 +164,7 @@ public class TrackCommands : BaseCommandModule
     }
 
     [Command("unlove", RunMode = RunMode.Async)]
-    [Discord.Commands.Summary("Removes the track you're currently listening to or searching for from your last.fm loved tracks.")]
+    [Summary("Removes the track you're currently listening to or searching for from your last.fm loved tracks.")]
     [Examples("unlove", "ul", "unlove Lou Reed Brandenburg Gate")]
     [Alias("ul", "unheart", "hate", "fuck")]
     [UserSessionRequired]
@@ -189,7 +183,7 @@ public class TrackCommands : BaseCommandModule
     }
 
     [Command("loved", RunMode = RunMode.Async)]
-    [Discord.Commands.Summary("Shows your Last.fm loved tracks.")]
+    [Summary("Shows your Last.fm loved tracks.")]
     [Examples("loved", "lt", "lovedtracks lfm:fm-bot", "lovedtracks @user")]
     [Alias("lovedtracks", "lt")]
     [UserSessionRequired]
@@ -261,7 +255,7 @@ public class TrackCommands : BaseCommandModule
 
             var lovedTrackPages = lovedTracks.Content.RecentTracks.ChunkBy(10);
 
-            var counter = lovedTracks.Content.RecentTracks.Count;
+            var counter = lovedTracks.Content.TotalAmount;
             foreach (var lovedTrackPage in lovedTrackPages)
             {
                 var albumPageString = new StringBuilder();
@@ -325,8 +319,8 @@ public class TrackCommands : BaseCommandModule
     [Summary("Shows your or someone else's top tracks over a certain time period.")]
     [Options(Constants.CompactTimePeriodList, Constants.UserMentionExample,
         Constants.BillboardExample, Constants.EmbedSizeExample)]
-    [Examples("tt", "toptracks", "tt y 3", "toptracks weekly @user", "tt bb xl")]
-    [Alias("tt", "tl", "tracklist", "tracks", "trackslist", "top tracks", "top track")]
+    [Examples("tt", "toptracks", "tt y", "toptracks weekly @user", "tt bb xl")]
+    [Alias("tt", "tl", "tracklist", "tracks", "trackslist", "top tracks", "top track", "ttracks")]
     [UsernameSetRequired]
     [SupportsPagination]
     [CommandCategories(CommandCategory.Tracks)]
@@ -341,7 +335,7 @@ public class TrackCommands : BaseCommandModule
             var userSettings = await this._settingService.GetUser(extraOptions, contextUser, this.Context);
             var topListSettings = SettingService.SetTopListSettings(extraOptions);
             userSettings.RegisteredLastFm ??= await this._indexService.AddUserRegisteredLfmDate(userSettings.UserId);
-            var timeSettings = SettingService.GetTimePeriod(extraOptions, registeredLastFm: userSettings.RegisteredLastFm);
+            var timeSettings = SettingService.GetTimePeriod(extraOptions, registeredLastFm: userSettings.RegisteredLastFm, timeZone: userSettings.TimeZone);
             var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
             var mode = SettingService.SetMode(extraOptions, contextUser.Mode);
 
@@ -374,13 +368,13 @@ public class TrackCommands : BaseCommandModule
         {
             var userSettings = await this._settingService.GetUser(extraOptions, contextUser, this.Context);
             userSettings.RegisteredLastFm ??= await this._indexService.AddUserRegisteredLfmDate(userSettings.UserId);
-            var timeSettings = SettingService.GetTimePeriod(extraOptions, registeredLastFm: userSettings.RegisteredLastFm);
+            var timeSettings = SettingService.GetTimePeriod(extraOptions, registeredLastFm: userSettings.RegisteredLastFm, timeZone: userSettings.TimeZone);
             var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
             if (timeSettings.DefaultPicked)
             {
                 var monthName = DateTime.UtcNow.AddDays(-24).ToString("MMM", CultureInfo.InvariantCulture);
-                timeSettings = SettingService.GetTimePeriod(monthName, registeredLastFm: userSettings.RegisteredLastFm);
+                timeSettings = SettingService.GetTimePeriod(monthName, registeredLastFm: userSettings.RegisteredLastFm, timeZone: userSettings.TimeZone);
             }
 
             var response = await this._trackBuilders.GetReceipt(new ContextModel(this.Context, prfx, contextUser), userSettings, timeSettings);
@@ -697,7 +691,7 @@ public class TrackCommands : BaseCommandModule
 
         if (result.Success)
         {
-            this._embed.WithDescription($"Track could not be found, please check your search values and try again.");
+            this._embed.WithDescription("Track could not be found, please check your search values and try again.");
             await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
             this.Context.LogCommandUsed(CommandResponse.NotFound);
             return null;
@@ -707,5 +701,28 @@ public class TrackCommands : BaseCommandModule
         await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
         this.Context.LogCommandUsed(CommandResponse.LastFmError);
         return null;
+    }
+
+    [Command("eurovision", RunMode = RunMode.Async)]
+    [Alias("ev")]
+    [RequiresIndex]
+    public async Task EurovisionAsync([Remainder] string extraOptions = null)
+    {
+        try
+        {
+            var year = SettingService.GetYear(extraOptions);
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+
+            var response =
+                await this._eurovisionBuilders.GetEurovisionOverview(new ContextModel(this.Context, prfx), year ?? DateTime.UtcNow.Year, null);
+
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
     }
 }

@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
+using FMBot.Bot.Factories;
 using FMBot.Bot.Models;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.ThirdParty;
@@ -24,6 +25,7 @@ public class ChartBuilders
     private readonly SupporterService _supporterService;
     private readonly SpotifyService _spotifyService;
     private readonly ArtistsService _artistService;
+    private readonly MusicDataFactory _musicDataFactory;
 
     public ChartBuilders(ChartService chartService,
         IDataSourceFactory dataSourceFactory,
@@ -31,7 +33,8 @@ public class ChartBuilders
         UserService userService,
         SupporterService supporterService,
         SpotifyService spotifyService,
-        ArtistsService artistService)
+        ArtistsService artistService,
+        MusicDataFactory musicDataFactory)
     {
         this._chartService = chartService;
         this._dataSourceFactory = dataSourceFactory;
@@ -40,6 +43,7 @@ public class ChartBuilders
         this._supporterService = supporterService;
         this._spotifyService = spotifyService;
         this._artistService = artistService;
+        this._musicDataFactory = musicDataFactory;
     }
 
     public async Task<ResponseModel> AlbumChartAsync(
@@ -71,14 +75,11 @@ public class ChartBuilders
             extraAlbums = chartSettings.Height;
         }
 
-        var imagesToRequest = chartSettings.ImagesNeeded + extraAlbums;
-
-        var albums = await this._dataSourceFactory.GetTopAlbumsAsync(userSettings.UserNameLastFm, chartSettings.TimeSettings, imagesToRequest);
+        var albums = await this._dataSourceFactory.GetTopAlbumsAsync(userSettings.UserNameLastFm, chartSettings.TimeSettings, chartSettings.ReleaseYearFilter.HasValue || chartSettings.ReleaseDecadeFilter.HasValue ? 1000 : 250);
 
         if (albums.Content?.TopAlbums == null || albums.Content.TopAlbums.Count < chartSettings.ImagesNeeded)
         {
             var count = albums.Content?.TopAlbums?.Count ?? 0;
-
             var reply =
                 $"User hasn't listened to enough albums ({count} of required {chartSettings.ImagesNeeded}) for a chart this size. \n" +
                 $"Please try a smaller chart or a bigger time period ({Constants.CompactTimePeriodList}).";
@@ -95,9 +96,49 @@ public class ChartBuilders
             return response;
         }
 
-        var topAlbums = albums.Content.TopAlbums;
+        if ((chartSettings.ReleaseYearFilter.HasValue || chartSettings.ReleaseDecadeFilter.HasValue) && chartSettings.TimeSettings.TimePeriod == TimePeriod.AllTime)
+        {
+            var topAllTimeDb = await this._albumService.GetUserAllTimeTopAlbums(userSettings.UserId);
+            if (topAllTimeDb.Count > 1000)
+            {
+                albums.Content.TopAlbums = topAllTimeDb;
+                albums.Content.TotalAmount = topAllTimeDb.Count;
+            }
+        }
 
-        topAlbums = await this._albumService.FillMissingAlbumCovers(topAlbums);
+        albums.Content.TopAlbums = await this._albumService.FillMissingAlbumCovers(albums.Content.TopAlbums);
+        
+        if (chartSettings.ReleaseYearFilter.HasValue)
+        {
+            albums = await this._albumService.FilterAlbumToReleaseYear(albums, chartSettings.ReleaseYearFilter.Value);
+
+            if (albums.Content.TopAlbums.Count < chartSettings.ImagesNeeded)
+            {
+                response.Text = $"Sorry, you haven't listened to enough albums released in {chartSettings.ReleaseYearFilter} ({albums.Content.TopAlbums.Count} of required {chartSettings.ImagesNeeded}) to generate a chart.\n" +
+                                $"Please try a smaller chart, a different year or a bigger time period ({Constants.CompactTimePeriodList})";
+                response.ResponseType = ResponseType.Text;
+                response.CommandResponse = CommandResponse.WrongInput;
+                return response;
+            }
+        }
+        else if (chartSettings.ReleaseDecadeFilter.HasValue)
+        {
+            albums = await this._albumService.FilterAlbumToReleaseDecade(albums, chartSettings.ReleaseDecadeFilter.Value);
+
+            if (albums.Content.TopAlbums.Count < chartSettings.ImagesNeeded)
+            {
+                response.Text = $"Sorry, you haven't listened to enough albums released in the {chartSettings.ReleaseDecadeFilter}s ({albums.Content.TopAlbums.Count} of required {chartSettings.ImagesNeeded}) to generate a chart.\n" +
+                                $"Please try a smaller chart, a different year or a bigger time period ({Constants.CompactTimePeriodList})";
+                response.ResponseType = ResponseType.Text;
+                response.CommandResponse = CommandResponse.WrongInput;
+                return response;
+            }
+        }
+        
+        var topAlbums = albums.Content.TopAlbums;
+        
+        var imagesToRequest = chartSettings.ImagesNeeded + extraAlbums;
+        topAlbums = topAlbums.Take(imagesToRequest).ToList();
 
         var albumsWithoutImage = topAlbums.Where(f => f.AlbumCoverUrl == null).ToList();
 
@@ -108,7 +149,7 @@ public class ChartBuilders
             var albumCall = await this._dataSourceFactory.GetAlbumInfoAsync(albumWithoutImage.ArtistName, albumWithoutImage.AlbumName, userSettings.UserNameLastFm);
             if (albumCall.Success && albumCall.Content?.AlbumUrl != null)
             {
-                var spotifyArtistImage = await this._spotifyService.GetOrStoreSpotifyAlbumAsync(albumCall.Content);
+                var spotifyArtistImage = await this._musicDataFactory.GetOrStoreAlbumAsync(albumCall.Content);
                 if (spotifyArtistImage?.SpotifyImageUrl != null)
                 {
                     var index = topAlbums.FindIndex(f => f.ArtistName == albumWithoutImage.ArtistName &&
@@ -243,7 +284,7 @@ public class ChartBuilders
             var artistCall = await this._dataSourceFactory.GetArtistInfoAsync(artistWithoutImage.ArtistName, userSettings.UserNameLastFm);
             if (artistCall.Success && artistCall.Content?.ArtistUrl != null)
             {
-                var spotifyArtistImage = await this._spotifyService.GetOrStoreArtistAsync(artistCall.Content);
+                var spotifyArtistImage = await this._musicDataFactory.GetOrStoreArtistAsync(artistCall.Content);
                 if (spotifyArtistImage != null)
                 {
                     var index = topArtists.FindIndex(f => f.ArtistName == artistWithoutImage.ArtistName);

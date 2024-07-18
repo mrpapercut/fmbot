@@ -16,7 +16,6 @@ using FMBot.Domain.Flags;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using FMBot.Domain.Types;
-using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using FMBot.Persistence.Repositories;
@@ -25,6 +24,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Serilog;
+using Web.InternalApi;
 
 namespace FMBot.Bot.Services;
 
@@ -39,6 +39,8 @@ public class ArtistsService
     private readonly TimerService _timer;
     private readonly IUpdateService _updateService;
     private readonly AliasService _aliasService;
+    private readonly UserService _userService;
+    private readonly ArtistEnrichment.ArtistEnrichmentClient _artistEnrichment;
 
     public ArtistsService(IDbContextFactory<FMBotDbContext> contextFactory,
         IMemoryCache cache,
@@ -48,7 +50,9 @@ public class ArtistsService
         WhoKnowsArtistService whoKnowsArtistService,
         TimerService timer,
         IUpdateService updateService,
-        AliasService aliasService)
+        AliasService aliasService,
+        UserService userService,
+        ArtistEnrichment.ArtistEnrichmentClient artistEnrichment)
     {
         this._contextFactory = contextFactory;
         this._cache = cache;
@@ -58,12 +62,26 @@ public class ArtistsService
         this._timer = timer;
         this._updateService = updateService;
         this._aliasService = aliasService;
+        this._userService = userService;
+        this._artistEnrichment = artistEnrichment;
         this._botSettings = botSettings.Value;
     }
 
     public async Task<ArtistSearch> SearchArtist(ResponseModel response, IUser discordUser, string artistValues, string lastFmUserName, string sessionKey = null, string otherUserUsername = null,
-        bool useCachedArtists = false, int? userId = null, bool redirectsEnabled = true, ulong? interactionId = null)
+        bool useCachedArtists = false, int? userId = null, bool redirectsEnabled = true, ulong? interactionId = null, IUserMessage referencedMessage = null)
     {
+        if (referencedMessage != null && string.IsNullOrWhiteSpace(artistValues))
+        {
+            var internalLookup = CommandContextExtensions.GetReferencedMusic(referencedMessage.Id)
+                                 ??
+                                 await this._userService.GetReferencedMusic(referencedMessage.Id);
+
+            if (internalLookup?.Artist != null)
+            {
+                artistValues = internalLookup.Artist;
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(artistValues) && artistValues.Length != 0)
         {
             if (otherUserUsername != null)
@@ -96,7 +114,7 @@ public class ArtistsService
             Response<ArtistInfo> artistCall;
             if (useCachedArtists)
             {
-                artistCall = await GetCachedArtist(artistValues, lastFmUserName, userId, redirectsEnabled);
+                artistCall = await GetDatabaseArtist(artistValues, lastFmUserName, userId, redirectsEnabled);
             }
             else
             {
@@ -106,6 +124,10 @@ public class ArtistsService
             if (interactionId.HasValue)
             {
                 PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, artistValues);
+                response.ReferencedMusic = new ReferencedMusic
+                {
+                    Artist = artistValues
+                };
             }
 
             if (!artistCall.Success && artistCall.Error == ResponseStatus.MissingParameters)
@@ -153,7 +175,7 @@ public class ArtistsService
             Response<ArtistInfo> artistCall;
             if (useCachedArtists)
             {
-                artistCall = await GetCachedArtist(lastPlayedTrack.ArtistName, lastFmUserName, userId, redirectsEnabled);
+                artistCall = await GetDatabaseArtist(lastPlayedTrack.ArtistName, lastFmUserName, userId, redirectsEnabled);
             }
             else
             {
@@ -163,6 +185,10 @@ public class ArtistsService
             if (interactionId.HasValue)
             {
                 PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, lastPlayedTrack.ArtistName);
+                response.ReferencedMusic = new ReferencedMusic
+                {
+                    Artist = lastPlayedTrack.ArtistName
+                };
             }
 
             if (artistCall.Content == null || !artistCall.Success)
@@ -177,7 +203,7 @@ public class ArtistsService
         }
     }
 
-    private async Task<Response<ArtistInfo>> GetCachedArtist(string artistName, string lastFmUserName, int? userId = null, bool redirectsEnabled = true)
+    private async Task<Response<ArtistInfo>> GetDatabaseArtist(string artistName, string lastFmUserName, int? userId = null, bool redirectsEnabled = true)
     {
         Response<ArtistInfo> artistInfo;
         var cachedArtist = await GetArtistFromDatabase(artistName, redirectsEnabled);
@@ -185,7 +211,7 @@ public class ArtistsService
         {
             artistInfo = new Response<ArtistInfo>
             {
-                Content = CachedArtistToArtistInfo(cachedArtist),
+                Content = DatabaseArtistToArtistInfo(cachedArtist),
                 Success = true
             };
 
@@ -203,7 +229,7 @@ public class ArtistsService
         return artistInfo;
     }
 
-    private ArtistInfo CachedArtistToArtistInfo(Artist artist)
+    private static ArtistInfo DatabaseArtistToArtistInfo(Artist artist)
     {
         return new ArtistInfo
         {
@@ -215,56 +241,32 @@ public class ArtistsService
 
     public async Task<List<TopArtist>> FillArtistImages(List<TopArtist> topArtists)
     {
-        if (topArtists.All(a => a.ArtistImageUrl != null))
+        var request = new ArtistRequest
         {
-            return topArtists;
-        }
+            Artists =
+            {
+                topArtists.Select(s => new ArtistWithImage
+                {
+                    ArtistName = s.ArtistName,
+                    ArtistImageUrl = s.ArtistImageUrl ?? ""
+                })
+            }
+        };
 
-        await CacheSpotifyArtistImages();
+        var artists = await this._artistEnrichment.AddMissingArtistImagesAsync(request);
 
         foreach (var topArtist in topArtists.Where(w => w.ArtistImageUrl == null))
         {
-            var artistImage = (string)this._cache.Get(CacheKeyForArtist(topArtist.ArtistName));
+            var artist = artists.Artists.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f.ArtistImageUrl) &&
+                                                          f.ArtistName == topArtist.ArtistName);
 
-            if (artistImage != null)
+            if (artist != null)
             {
-                topArtist.ArtistImageUrl = artistImage;
+                topArtist.ArtistImageUrl = artist.ArtistImageUrl;
             }
         }
 
         return topArtists;
-    }
-
-    private async Task CacheSpotifyArtistImages()
-    {
-        const string cacheKey = "artist-spotify-covers";
-        var cacheTime = TimeSpan.FromMinutes(5);
-
-        if (this._cache.TryGetValue(cacheKey, out _))
-        {
-            return;
-        }
-
-        const string sql = "SELECT LOWER(spotify_image_url) as spotify_image_url, LOWER(name) as artist_name " +
-                           "FROM public.artists where last_fm_url is not null and spotify_image_url is not null;";
-
-        DefaultTypeMap.MatchNamesWithUnderscores = true;
-        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
-        await connection.OpenAsync();
-
-        var artistCovers = (await connection.QueryAsync<ArtistSpotifyCoverDto>(sql)).ToList();
-
-        foreach (var artistCover in artistCovers)
-        {
-            this._cache.Set(CacheKeyForArtist(artistCover.ArtistName), artistCover.SpotifyImageUrl, cacheTime);
-        }
-
-        this._cache.Set(cacheKey, true, cacheTime);
-    }
-
-    public static string CacheKeyForArtist(string artistName)
-    {
-        return $"artist-spotify-image-{artistName.ToLower()}";
     }
 
     // Top artists for 2 users

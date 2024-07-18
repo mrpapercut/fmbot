@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -57,25 +59,98 @@ public static class CommandContextExtensions
         PublicProperties.UsedCommandsResponses.TryAdd(context.Message.Id, CommandResponse.LastFmError);
     }
 
-    public static async Task SendResponse(this ICommandContext context, InteractiveService interactiveService, ResponseModel response)
+    public static async Task<ulong?> SendResponse(this ICommandContext context, InteractiveService interactiveService, ResponseModel response)
     {
+        ulong? responseId = null;
+
+        if (PublicProperties.UsedCommandsResponseMessageId.ContainsKey(context.Message.Id))
+        {
+            switch (response.ResponseType)
+            {
+                case ResponseType.Text:
+                    await context.Channel.ModifyMessageAsync(PublicProperties.UsedCommandsResponseMessageId[context.Message.Id], msg =>
+                    {
+                        msg.Content = response.Text;
+                        msg.Embed = null;
+                        msg.Components = response.Components?.Build();
+                    });
+                    break;
+                case ResponseType.Embed:
+                case ResponseType.ImageWithEmbed:
+                case ResponseType.ImageOnly:
+                    await context.Channel.ModifyMessageAsync(PublicProperties.UsedCommandsResponseMessageId[context.Message.Id], msg =>
+                    {
+                        msg.Content = response.Text;
+                        msg.Embed = response.ResponseType == ResponseType.ImageOnly ? null : response.Embed?.Build();
+                        msg.Components = response.Components?.Build();
+                        msg.Attachments = response.Stream != null ? new Optional<IEnumerable<FileAttachment>>(new List<FileAttachment>
+                        {
+                            new(response.Stream, response.Spoiler ? $"SPOILER_{response.FileName}.png" : $"{response.FileName}.png")
+                        }) : null;
+                    });
+
+                    if (response.Stream != null)
+                    {
+                        await response.Stream.DisposeAsync();
+                    }
+
+                    break;
+                case ResponseType.Paginator:
+                    var existingMessage = await context.Channel.GetMessageAsync(PublicProperties.UsedCommandsResponseMessageId[context.Message.Id]);
+                    await interactiveService.SendPaginatorAsync(
+                                response.StaticPaginator,
+                                (IUserMessage)existingMessage,
+                                TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds));
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+
+            if (response.ReferencedMusic != null)
+            {
+                PublicProperties.UsedCommandsReferencedMusic.TryRemove(context.Message.Id, out _);
+                PublicProperties.UsedCommandsReferencedMusic.TryAdd(context.Message.Id, response.ReferencedMusic);
+
+                if (PublicProperties.UsedCommandsTracks.TryRemove(context.Message.Id, out _))
+                {
+                    PublicProperties.UsedCommandsTracks.TryAdd(context.Message.Id, response.ReferencedMusic.Track);
+                }
+                if (PublicProperties.UsedCommandsAlbums.TryRemove(context.Message.Id, out _))
+                {
+                    if (response.ReferencedMusic.Album != null)
+                    {
+                        PublicProperties.UsedCommandsAlbums.TryAdd(context.Message.Id, response.ReferencedMusic.Album);
+                    }
+                }
+                if (PublicProperties.UsedCommandsArtists.TryRemove(context.Message.Id, out _))
+                {
+                    PublicProperties.UsedCommandsArtists.TryAdd(context.Message.Id, response.ReferencedMusic.Artist);
+                }
+            }
+
+            return null;
+        }
+
         switch (response.ResponseType)
         {
             case ResponseType.Text:
-                await context.Channel.SendMessageAsync(response.Text, allowedMentions: AllowedMentions.None, components: response.Components?.Build());
+                var text = await context.Channel.SendMessageAsync(response.Text, allowedMentions: AllowedMentions.None, components: response.Components?.Build());
+                responseId = text.Id;
                 break;
             case ResponseType.Embed:
-                await context.Channel.SendMessageAsync("", false, response.Embed.Build(), components: response.Components?.Build());
+                var embed = await context.Channel.SendMessageAsync("", false, response.Embed.Build(), components: response.Components?.Build());
+                responseId = embed.Id;
                 break;
             case ResponseType.Paginator:
-                _ = interactiveService.SendPaginatorAsync(
+                var paginator = await interactiveService.SendPaginatorAsync(
                     response.StaticPaginator,
                     context.Channel,
                     TimeSpan.FromMinutes(DiscordConstants.PaginationTimeoutInSeconds));
+                responseId = paginator.Message.Id;
                 break;
             case ResponseType.ImageWithEmbed:
                 var imageEmbedFilename = StringExtensions.TruncateLongString(StringExtensions.ReplaceInvalidChars(response.FileName), 60);
-                await context.Channel.SendFileAsync(
+                var imageWithEmbed = await context.Channel.SendFileAsync(
                     response.Stream,
                     imageEmbedFilename + ".png",
                     null,
@@ -83,22 +158,39 @@ public static class CommandContextExtensions
                     response.Embed.Build(),
                     isSpoiler: response.Spoiler,
                     components: response.Components?.Build());
+
                 await response.Stream.DisposeAsync();
+                responseId = imageWithEmbed.Id;
                 break;
             case ResponseType.ImageOnly:
                 var imageFilename = StringExtensions.TruncateLongString(StringExtensions.ReplaceInvalidChars(response.FileName), 60);
-                await context.Channel.SendFileAsync(
+                var image = await context.Channel.SendFileAsync(
                     response.Stream,
                     imageFilename + ".png",
                     null,
                     false,
                     isSpoiler: response.Spoiler,
                     components: response.Components?.Build());
+
                 await response.Stream.DisposeAsync();
+                responseId = image.Id;
                 break;
             default:
                 throw new ArgumentOutOfRangeException();
         }
+
+        if (responseId.HasValue)
+        {
+            PublicProperties.UsedCommandsResponseMessageId.TryAdd(context.Message.Id, responseId.Value);
+            PublicProperties.UsedCommandsResponseContextId.TryAdd(responseId.Value, context.Message.Id);
+        }
+
+        if (response.HintShown == true && !PublicProperties.UsedCommandsHintShown.Contains(context.Message.Id))
+        {
+            PublicProperties.UsedCommandsHintShown.Add(context.Message.Id);
+        }
+
+        return responseId;
     }
 
     public static string GenerateRandomCode()
@@ -121,5 +213,36 @@ public static class CommandContextExtensions
         }
 
         return result.ToString();
+    }
+
+    public static ReferencedMusic GetReferencedMusic(ulong lookupId)
+    {
+        if (PublicProperties.UsedCommandsResponseContextId.ContainsKey(lookupId))
+        {
+            PublicProperties.UsedCommandsResponseContextId.TryGetValue(lookupId, out lookupId);
+        }
+
+        if (PublicProperties.UsedCommandsReferencedMusic.TryGetValue(lookupId, out var value))
+        {
+            return value;
+        }
+
+        if (PublicProperties.UsedCommandsArtists.ContainsKey(lookupId) ||
+            PublicProperties.UsedCommandsAlbums.ContainsKey(lookupId) ||
+            PublicProperties.UsedCommandsTracks.ContainsKey(lookupId))
+        {
+            PublicProperties.UsedCommandsArtists.TryGetValue(lookupId, out var artist);
+            PublicProperties.UsedCommandsAlbums.TryGetValue(lookupId, out var album);
+            PublicProperties.UsedCommandsTracks.TryGetValue(lookupId, out var track);
+
+            return new ReferencedMusic
+            {
+                Artist = artist,
+                Album = album,
+                Track = track
+            };
+        }
+
+        return null;
     }
 }

@@ -5,12 +5,11 @@ using System.Text;
 using System.Threading.Tasks;
 using Fergun.Interactive;
 using FMBot.Bot.Extensions;
+using FMBot.Bot.Factories;
 using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
-using FMBot.Bot.Services.ThirdParty;
 using FMBot.Domain;
-using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
@@ -29,10 +28,15 @@ public class CountryBuilders
     private readonly ArtistsService _artistsService;
     private readonly PlayService _playService;
     private readonly PuppeteerService _puppeteerService;
-    private readonly SpotifyService _spotifyService;
+    private readonly MusicDataFactory _musicDataFactory;
 
-    public CountryBuilders(CountryService countryService, UserService userService, IDataSourceFactory dataSourceFactory,
-        ArtistsService artistsService, PlayService playService, PuppeteerService puppeteerService, SpotifyService spotifyService)
+    public CountryBuilders(CountryService countryService,
+        UserService userService,
+        IDataSourceFactory dataSourceFactory,
+        ArtistsService artistsService,
+        PlayService playService,
+        PuppeteerService puppeteerService,
+        MusicDataFactory musicDataFactory)
     {
         this._countryService = countryService;
         this._userService = userService;
@@ -40,7 +44,7 @@ public class CountryBuilders
         this._artistsService = artistsService;
         this._playService = playService;
         this._puppeteerService = puppeteerService;
-        this._spotifyService = spotifyService;
+        this._musicDataFactory = musicDataFactory;
     }
 
     public async Task<ResponseModel> CountryAsync(
@@ -51,6 +55,18 @@ public class CountryBuilders
         {
             ResponseType = ResponseType.Embed
         };
+
+        if (context.ReferencedMessage != null)
+        {
+            var internalLookup = CommandContextExtensions.GetReferencedMusic(context.ReferencedMessage.Id)
+                                 ??
+                                 await this._userService.GetReferencedMusic(context.ReferencedMessage.Id);
+
+            if (internalLookup?.Artist != null)
+            {
+                countryOptions = internalLookup.Artist;
+            }
+        }
 
         CountryInfo country = null;
         if (string.IsNullOrWhiteSpace(countryOptions))
@@ -71,7 +87,7 @@ public class CountryBuilders
                 var artistCall = await this._dataSourceFactory.GetArtistInfoAsync(artistName, context.ContextUser.UserNameLastFM);
                 if (artistCall.Success)
                 {
-                    var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistCall.Content);
+                    var cachedArtist = await this._musicDataFactory.GetOrStoreArtistAsync(artistCall.Content);
 
                     if (cachedArtist.CountryCode != null)
                     {
@@ -101,10 +117,12 @@ public class CountryBuilders
                     return response;
                 }
 
-                if (artist?.SpotifyImageUrl != null)
+                if (artist.SpotifyImageUrl != null)
                 {
                     response.Embed.WithThumbnailUrl(artist.SpotifyImageUrl);
                 }
+
+                PublicProperties.UsedCommandsArtists.TryAdd(context.InteractionId, artist.Name);
 
                 var description = new StringBuilder();
                 foundCountry = this._countryService.GetValidCountry(artist.CountryCode);
@@ -142,7 +160,7 @@ public class CountryBuilders
                     var artistCall = await this._dataSourceFactory.GetArtistInfoAsync(artist.Name, context.ContextUser.UserNameLastFM);
                     if (artistCall.Success)
                     {
-                        artist = await this._spotifyService.GetOrStoreArtistAsync(artistCall.Content);
+                        artist = await this._musicDataFactory.GetOrStoreArtistAsync(artistCall.Content);
                     }
                 }
 
@@ -168,6 +186,7 @@ public class CountryBuilders
                             $"*{artist.Location}*");
                     }
 
+                    PublicProperties.UsedCommandsArtists.TryAdd(context.InteractionId, artist.Name);
                     response.Embed.WithDescription(description.ToString());
 
                     response.Embed.WithFooter($"Country source: MusicBrainz\n" +
@@ -374,7 +393,7 @@ public class CountryBuilders
             return response;
         }
 
-        var countryPages = countries.ChunkBy((int) topListSettings.EmbedSize);
+        var countryPages = countries.ChunkBy((int)topListSettings.EmbedSize);
 
         var counter = 1;
         var pageCounter = 1;

@@ -25,7 +25,7 @@ public static class GenericEmbedService
                               $"Please use the {loginCommand} command. The bot will then send you a link so you can connect your Last.fm account.");
 
         embed.WithUrl($"{Constants.DocsUrl}/commands/");
-
+        
         embed.WithColor(DiscordConstants.WarningColorOrange);
     }
 
@@ -113,6 +113,10 @@ public static class GenericEmbedService
                 {
                     embed.Title = null;
                     embed.WithDescription($"Sorry, Last.fm did not return an {expectedResultType} for the name you searched for.");
+                }
+                else if (message.Equals("Not found"))
+                {
+                    embed.WithDescription($"Last.fm did not return a result. Maybe there are no results or you're looking for a user that recently changed their username (in which case they should re-run /login).");
                 }
                 else
                 {

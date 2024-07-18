@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Discord;
 using Discord.Interactions;
+using Discord.WebSocket;
 using Fergun.Interactive;
 using FMBot.Bot.Attributes;
 using FMBot.Bot.AutoCompleteHandlers;
@@ -13,6 +15,7 @@ using FMBot.Bot.Models.Modals;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
+using FMBot.Domain;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
 using SummaryAttribute = Discord.Interactions.SummaryAttribute;
@@ -49,9 +52,11 @@ public class PlaySlashCommands : InteractionModuleBase
 
     [SlashCommand("fm", "Now Playing - Shows you or someone else their current track")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task NowPlayingAsync([Summary("user", "The user to show (defaults to self)")] string user = null)
     {
-        var existingFmCooldown = await this._guildService.GetChannelCooldown(this.Context.Channel.Id);
+        var existingFmCooldown = await this._guildService.GetChannelCooldown(this.Context.Channel?.Id);
         if (existingFmCooldown.HasValue)
         {
             if (StackCooldownTarget.Contains(this.Context.User.Id))
@@ -82,40 +87,51 @@ public class PlaySlashCommands : InteractionModuleBase
 
         _ = DeferAsync();
 
-        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
-        var userSettings = await this._settingService.GetUser(user, contextUser, this.Context.Guild, this.Context.User, true);
-
-        var response = await this._playBuilder.NowPlayingAsync(new ContextModel(this.Context, contextUser), userSettings);
-
-        await this.Context.SendFollowUpResponse(this.Interactivity, response);
-        this.Context.LogCommandUsed(response.CommandResponse);
-
-        var message = await this.Context.Interaction.GetOriginalResponseAsync();
-
         try
         {
-            if (message != null && response.CommandResponse == CommandResponse.Ok)
+            var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+            var userSettings =
+                await this._settingService.GetUser(user, contextUser, this.Context.Guild, this.Context.User, true);
+
+            var response =
+                await this._playBuilder.NowPlayingAsync(new ContextModel(this.Context, contextUser), userSettings);
+
+            await this.Context.SendFollowUpResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+
+            var message = await this.Context.Interaction.GetOriginalResponseAsync();
+
+            try
             {
-                if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any())
+                if (message != null && this.Context.Channel != null && response.CommandResponse == CommandResponse.Ok)
                 {
-                    await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
+                    if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any() && SupporterService.IsSupporter(contextUser.UserType))
+                    {
+                        await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
+                    }
+                    else if (this.Context.Guild != null)
+                    {
+                        await this._guildService.AddGuildReactionsAsync(message, this.Context.Guild);
+                    }
                 }
-                else if (this.Context.Guild != null)
-                {
-                    await this._guildService.AddGuildReactionsAsync(message, this.Context.Guild);
-                }
+            }
+            catch (Exception e)
+            {
+                await this.Context.HandleCommandException(e, "Could not add emote reactions", sendReply: false);
+                await ReplyAsync(
+                    $"Could not add automatic emoji reactions to `/fm`. Make sure the emojis still exist, the bot is the same server as where the emojis come from and the bot has permission to `Add Reactions`.");
             }
         }
         catch (Exception e)
         {
-            await this.Context.HandleCommandException(e, "Could not add emote reactions", sendReply: false);
-            await ReplyAsync(
-                $"Could not add automatic emoji reactions to `/fm`. Make sure the emojis still exist, the bot is the same server as where the emojis come from and the bot has permission to `Add Reactions`.");
+            await this.Context.HandleCommandException(e);
         }
     }
 
     [SlashCommand("recent", "Shows you or someone else their recent tracks")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task RecentAsync(
         [Summary("User", "The user to show (defaults to self)")] string user = null,
         [Summary("Artist", "Artist you want to filter on (Supporter only)")]
@@ -142,9 +158,13 @@ public class PlaySlashCommands : InteractionModuleBase
 
     [SlashCommand("streak", "Shows you or someone else their streak")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task StreakAsync(
         [Summary("User", "The user to show (defaults to self)")] string user = null)
     {
+        _ = DeferAsync();
+
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
         var userSettings = await this._settingService.GetUser(user, contextUser, this.Context.Guild, this.Context.User, true);
         var userWithStreak = await this._userService.GetUserAsync(userSettings.DiscordUserId);
@@ -154,7 +174,7 @@ public class PlaySlashCommands : InteractionModuleBase
             var response = await this._playBuilder.StreakAsync(new ContextModel(this.Context, contextUser),
                 userSettings, userWithStreak);
 
-            await this.Context.SendResponse(this.Interactivity, response);
+            await this.Context.SendFollowUpResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)
@@ -165,16 +185,20 @@ public class PlaySlashCommands : InteractionModuleBase
 
     [SlashCommand("streakhistory", "Shows you or someone else their streak history")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task StreakHistory(
         [Summary("Editmode", "Enable or disable editor mode")] bool editMode = false,
-        [Summary("User", "The user to show (defaults to self)")] string user = null)
+        [Summary("User", "The user to show (defaults to self)")] string user = null,
+        [Summary("Artist", "The artist you want to filter your results to")]
+        [Autocomplete(typeof(ArtistAutoComplete))] string name = null)
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
         var userSettings = await this._settingService.GetUser(user, contextUser, this.Context.Guild, this.Context.User, true);
 
         try
         {
-            var response = await this._playBuilder.StreakHistoryAsync(new ContextModel(this.Context, contextUser), userSettings, editMode);
+            var response = await this._playBuilder.StreakHistoryAsync(new ContextModel(this.Context, contextUser), userSettings, editMode, name);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -210,6 +234,8 @@ public class PlaySlashCommands : InteractionModuleBase
 
     [SlashCommand("overview", "Shows a daily overview")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task OverviewAsync(
         [Summary("User", "The user to show (defaults to self)")] string user = null,
         [Summary("Amount", "Amount of days to show")] int amount = 4)
@@ -240,6 +266,8 @@ public class PlaySlashCommands : InteractionModuleBase
 
     [SlashCommand("pace", "Shows estimated date you reach a scrobble goal based on average scrobbles per day")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task PaceAsync(
         [Summary("Amount", "Goal scrobble amount")] int amount = 1,
         [Summary("Time-period", "Time period to base average playcount on")][Autocomplete(typeof(DateTimeAutoComplete))] string timePeriod = null,
@@ -254,7 +282,7 @@ public class PlaySlashCommands : InteractionModuleBase
         {
             var userInfo = await this._dataSourceFactory.GetLfmUserInfoAsync(userSettings.UserNameLastFm);
             var goalAmount = SettingService.GetGoalAmount(amount.ToString(), userInfo.Playcount);
-            var timeSettings = SettingService.GetTimePeriod(timePeriod, TimePeriod.AllTime);
+            var timeSettings = SettingService.GetTimePeriod(timePeriod, TimePeriod.AllTime, timeZone: userSettings.TimeZone);
 
             var response = await this._playBuilder.PaceAsync(new ContextModel(this.Context, contextUser),
                 userSettings, timeSettings, goalAmount, userInfo.Playcount, userInfo.RegisteredUnix);
@@ -270,6 +298,8 @@ public class PlaySlashCommands : InteractionModuleBase
 
     [SlashCommand("milestone", "Shows a milestone scrobble")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task MileStoneAsync(
         [Summary("Amount", "Milestone scrobble amount")] int amount = 99999999,
         [Summary("User", "The user to show (defaults to self)")] string user = null)
@@ -285,10 +315,52 @@ public class PlaySlashCommands : InteractionModuleBase
             var mileStoneAmount = SettingService.GetMilestoneAmount(amount.ToString(), userInfo.Playcount);
 
             var response = await this._playBuilder.MileStoneAsync(new ContextModel(this.Context, contextUser),
-                userSettings, mileStoneAmount, userInfo.Playcount);
+                userSettings, mileStoneAmount.amount, userInfo.Playcount);
 
             await this.Context.SendFollowUpResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [ComponentInteraction($"{InteractionConstants.RandomMilestone}-*-*")]
+    [UsernameSetRequired]
+    public async Task RandomMilestoneAsync(string discordUser, string requesterDiscordUser)
+    {
+        var discordUserId = ulong.Parse(discordUser);
+        var requesterDiscordUserId = ulong.Parse(requesterDiscordUser);
+
+        if (this.Context.User.Id != requesterDiscordUserId)
+        {
+            await RespondAsync("🎲 Sorry, only the user that requested the random milestone can reroll.", ephemeral: true);
+            return;
+        }
+
+        _ = DeferAsync();
+        await this.Context.DisableInteractionButtons();
+
+        var contextUser = await this._userService.GetUserWithDiscogs(requesterDiscordUserId);
+        var userSettings = await this._settingService.GetOriginalContextUser(discordUserId, requesterDiscordUserId, this.Context.Guild, this.Context.User);
+        var targetUser = await this._userService.GetUserWithDiscogs(requesterDiscordUserId);
+
+        try
+        {
+            var mileStoneAmount = SettingService.GetMilestoneAmount("random", targetUser.TotalPlaycount.GetValueOrDefault());
+
+            var response = await this._playBuilder.MileStoneAsync(new ContextModel(this.Context, contextUser),
+                userSettings, mileStoneAmount.amount, targetUser.TotalPlaycount.GetValueOrDefault(), mileStoneAmount.isRandom);
+
+            await this.Context.UpdateInteractionEmbed(response, this.Interactivity, false);
+            this.Context.LogCommandUsed(response.CommandResponse);
+
+            var message = (this.Context.Interaction as SocketMessageComponent)?.Message;
+            if (message != null && response.ReferencedMusic != null && PublicProperties.UsedCommandsResponseContextId.TryGetValue(message.Id, out var contextId))
+            {
+                await this._userService.UpdateInteractionContext(contextId, response.ReferencedMusic);
+            }
         }
         catch (Exception e)
         {

@@ -98,11 +98,22 @@ public static class PlayRepository
         await deletePlays.ExecuteNonQueryAsync();
     }
 
-    public static async Task RemoveAllImportPlays(int userId, NpgsqlConnection connection)
+    public static async Task RemoveAllImportedSpotifyPlays(int userId, NpgsqlConnection connection)
     {
         await using var deletePlays = new NpgsqlCommand("DELETE FROM public.user_plays " +
                                                         "WHERE user_id = @userId " +
                                                         "AND play_source = 1", connection);
+
+        deletePlays.Parameters.AddWithValue("userId", userId);
+
+        await deletePlays.ExecuteNonQueryAsync();
+    }
+
+    public static async Task RemoveAllImportedAppleMusicPlays(int userId, NpgsqlConnection connection)
+    {
+        await using var deletePlays = new NpgsqlCommand("DELETE FROM public.user_plays " +
+                                                        "WHERE user_id = @userId " +
+                                                        "AND play_source = 2", connection);
 
         deletePlays.Parameters.AddWithValue("userId", userId);
 
@@ -115,7 +126,7 @@ public static class PlayRepository
         {
             await using var deletePlays = new NpgsqlCommand("DELETE FROM public.user_plays " +
                                                             "WHERE user_id = @userId AND time_played = @timePlayed " +
-                                                            "AND play_source != 1", connection);
+                                                            "AND play_source != 1 AND play_source != 2", connection);
 
             deletePlays.Parameters.AddWithValue("userId", playToRemove.UserId);
             deletePlays.Parameters.AddWithValue("timePlayed", playToRemove.TimePlayed);
@@ -157,23 +168,20 @@ public static class PlayRepository
 
         sql += dataSource switch
         {
-            DataSource.LastFm => " FROM public.user_plays WHERE user_id = @userId AND play_source = 0 ",
-            DataSource.FullSpotifyThenLastFm => " FROM public.user_plays WHERE " +
-                                                "user_id = @userId AND ( " +
-                                                "(play_source <> 0 OR time_played > ( " +
-                                                "SELECT MAX(time_played) FROM public.user_plays WHERE user_id = @userId AND play_source <> 0 " +
-                                                ") OR  " +
-                                                "(play_source <> 0 AND time_played < ( " +
-                                                "SELECT MIN(time_played) FROM public.user_plays WHERE user_id = @userId AND play_source <> 0 " +
-                                                ")))) ",
-            DataSource.SpotifyThenFullLastFm => " FROM public.user_plays WHERE " +
-                                                "user_id = @userId AND ( " +
-                                                "(play_source = 0 OR time_played > ( " +
-                                                "SELECT MAX(time_played) FROM public.user_plays WHERE user_id = @userId AND play_source = 0 " +
-                                                ") OR  " +
-                                                "(play_source <> 0 AND time_played < ( " +
+            DataSource.LastFm => " FROM public.user_plays WHERE user_id = @userId AND artist_name IS NOT NULL AND play_source = 0 ",
+            DataSource.FullImportThenLastFm => " FROM public.user_plays WHERE user_id = @userId AND artist_name IS NOT NULL AND ( " +
+                                                "(play_source = 1 OR play_source = 2) OR  " +
+                                                "(play_source = 0 AND time_played >= ( " +
+                                                "SELECT MAX(time_played) FROM public.user_plays WHERE user_id = @userId AND (play_source = 1 OR play_source = 2) " +
+                                                ")) OR  " +
+                                                "(play_source = 0 AND time_played <= ( " +
+                                                "SELECT MIN(time_played) FROM public.user_plays WHERE user_id = @userId AND (play_source = 1 OR play_source = 2) " +
+                                                "))) ",
+            DataSource.ImportThenFullLastFm => " FROM public.user_plays WHERE user_id = @userId  AND artist_name IS NOT NULL AND ( " +
+                                                "play_source = 0 OR " +
+                                                "((play_source = 1 OR play_source = 2) AND time_played < ( " +
                                                 "SELECT MIN(time_played) FROM public.user_plays WHERE user_id = @userId AND play_source = 0 " +
-                                                ")))) ",
+                                                "))) ",
             _ => " FROM public.user_plays WHERE user_id = @userId "
         };
 
@@ -227,7 +235,7 @@ public static class PlayRepository
         end ??= DateTime.UtcNow;
 
         const string sql = "SELECT * FROM public.user_plays WHERE user_id = @userId " +
-                           "AND time_played >= @start AND time_played <= @end  " +
+                           "AND time_played >= @start AND time_played <= @end AND artist_name IS NOT NULL " +
                            "ORDER BY time_played DESC ";
         DefaultTypeMap.MatchNamesWithUnderscores = true;
         return (await connection.QueryAsync<UserPlay>(sql, new
@@ -261,5 +269,57 @@ public static class PlayRepository
         });
 
         return play != null;
+    }
+    
+    public static async Task MoveImports(int oldUserId, int newUserId, NpgsqlConnection connection)
+    {
+        const string sql = "UPDATE public.user_plays SET user_id = @newUserId " +
+                           "WHERE user_id = @oldUserId AND play_source != 0;";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await connection.QueryFirstOrDefaultAsync(sql, new
+        {
+            oldUserId,
+            newUserId
+        });
+    }
+    
+    public static async Task MoveStreaks(int oldUserId, int newUserId, NpgsqlConnection connection)
+    {
+        const string sql = "UPDATE public.user_streaks SET user_id = @newUserId " +
+                           "WHERE user_id = @oldUserId";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await connection.QueryFirstOrDefaultAsync(sql, new
+        {
+            oldUserId,
+            newUserId
+        });
+    }
+    
+    public static async Task MoveFeaturedLogs(int oldUserId, int newUserId, NpgsqlConnection connection)
+    {
+        const string sql = "UPDATE public.featured_logs SET user_id = @newUserId " +
+                           "WHERE user_id = @oldUserId";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await connection.QueryFirstOrDefaultAsync(sql, new
+        {
+            oldUserId,
+            newUserId
+        });
+    }
+    
+    public static async Task MoveFriends(int oldUserId, int newUserId, NpgsqlConnection connection)
+    {
+        const string sql = "UPDATE public.friends SET friend_user_id = @newUserId " +
+                           "WHERE friend_user_id = @oldUserId";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await connection.QueryFirstOrDefaultAsync(sql, new
+        {
+            oldUserId,
+            newUserId
+        });
     }
 }

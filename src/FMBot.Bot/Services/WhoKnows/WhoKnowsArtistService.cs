@@ -37,13 +37,15 @@ public class WhoKnowsArtistService
     public async Task<IList<WhoKnowsObjectWithUser>> GetIndexedUsersForArtist(IGuild discordGuild,
         IDictionary<int, FullGuildUser> guildUsers, int guildId, string artistName)
     {
-        const string sql = "SELECT ua.user_id, " +
-                           "ua.name, " +
+        const string sql = "BEGIN; " +
+                           "SET LOCAL enable_nestloop = OFF; " +
+                           "SELECT ua.user_id, " +
                            "ua.playcount " +
                            "FROM user_artists AS ua " +
-                           "INNER JOIN guild_users AS gu ON gu.user_id = ua.user_id " +
-                           "WHERE gu.guild_id = @guildId AND UPPER(ua.name) = UPPER(CAST(@artistName AS CITEXT)) " +
-                           "ORDER BY ua.playcount DESC ";
+                           "WHERE UPPER(ua.name) = UPPER(CAST(@artistName AS CITEXT)) " +
+                           "AND ua.user_id = ANY(SELECT user_id FROM guild_users WHERE guild_id = @guildId) " +
+                           "ORDER BY ua.playcount DESC; " +
+                           "COMMIT; ";
 
         DefaultTypeMap.MatchNamesWithUnderscores = true;
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
@@ -68,7 +70,7 @@ public class WhoKnowsArtistService
 
             var userName = guildUser.UserName ?? guildUser.UserNameLastFM;
 
-            if (i < 15)
+            if (i < 15 && discordGuild != null)
             {
                 var discordGuildUser = await discordGuild.GetUserAsync(guildUser.DiscordUserId, CacheMode.CacheOnly);
                 if (discordGuildUser != null)
@@ -79,7 +81,6 @@ public class WhoKnowsArtistService
 
             whoKnowsArtistList.Add(new WhoKnowsObjectWithUser
             {
-                Name = userArtist.Name,
                 DiscordName = userName,
                 Playcount = userArtist.Playcount,
                 LastFMUsername = guildUser.UserNameLastFM,
@@ -93,39 +94,11 @@ public class WhoKnowsArtistService
         return whoKnowsArtistList;
     }
 
-    public static async Task<IList<WhoKnowsObjectWithUser>> GetBasicUsersForArtist(NpgsqlConnection connection, int guildId, string artistName)
-    {
-        const string sql = "SELECT ua.user_id, " +
-                           "ua.playcount " +
-                           "FROM user_artists AS ua " +
-                           "FULL OUTER JOIN users AS u ON ua.user_id = u.user_id " +
-                           "INNER JOIN guild_users AS gu ON gu.user_id = ua.user_id " +
-                           "INNER JOIN guilds AS guild ON guild.guild_id = @guildId " +
-                           "WHERE gu.guild_id = @guildId AND UPPER(ua.name) = UPPER(CAST(@artistName AS CITEXT))  " +
-                           "AND NOT ua.user_id = ANY(SELECT user_id FROM guild_blocked_users WHERE blocked_from_who_knows = true AND guild_id = @guildId) " +
-                           "AND (gu.who_knows_whitelisted OR gu.who_knows_whitelisted IS NULL) " +
-                           "AND (guild.activity_threshold_days IS NULL OR u.last_used IS NOT NULL AND u.last_used > now()::DATE - guild.activity_threshold_days) " +
-                           "ORDER BY ua.playcount DESC ";
-
-        var userArtists = (await connection.QueryAsync<WhoKnowsArtistDto>(sql, new
-        {
-            guildId,
-            artistName
-        })).ToList();
-
-        return userArtists.Select(s => new WhoKnowsObjectWithUser
-        {
-            UserId = s.UserId,
-            Playcount = s.Playcount
-        }).ToList();
-    }
-
     public async Task<IList<WhoKnowsObjectWithUser>> GetGlobalUsersForArtists(IGuild discordGuild, string artistName)
     {
         const string sql = "SELECT * " +
                            "FROM (SELECT DISTINCT ON(UPPER(u.user_name_last_fm)) " +
                            "ua.user_id, " +
-                           "ua.name, " +
                            "ua.playcount, " +
                            "u.user_name_last_fm, " +
                            "u.discord_user_id, " +
@@ -168,7 +141,6 @@ public class WhoKnowsArtistService
 
             whoKnowsArtistList.Add(new WhoKnowsObjectWithUser
             {
-                Name = userArtist.Name,
                 DiscordName = userName,
                 Playcount = userArtist.Playcount,
                 LastFMUsername = userArtist.UserNameLastFm,
@@ -213,9 +185,9 @@ public class WhoKnowsArtistService
         const string sql = "SELECT * " +
                            "FROM (SELECT DISTINCT ON(UPPER(u.user_name_last_fm)) " +
                            "ua.user_id, " +
-                           "ua.name, " +
                            "ua.playcount, " +
-                           "u.user_name_last_fm " +
+                           "u.user_name_last_fm, " +
+                           "gu.user_name AS discord_name " +
                            "FROM user_artists AS ua " +
                            "FULL OUTER JOIN users AS u ON ua.user_id = u.user_id " +
                            "INNER JOIN friends AS fr ON fr.friend_user_id = ua.user_id " +
@@ -255,7 +227,6 @@ public class WhoKnowsArtistService
 
             whoKnowsArtistList.Add(new WhoKnowsObjectWithUser
             {
-                Name = userArtist.Name,
                 DiscordName = userName,
                 Playcount = userArtist.Playcount,
                 LastFMUsername = userArtist.UserNameLastFm,
@@ -418,7 +389,7 @@ public class WhoKnowsArtistService
                   " ROW_NUMBER() OVER (PARTITION BY up.user_id ORDER BY COUNT(*) DESC) as pos " +
                   "FROM user_plays AS up " +
                   "INNER JOIN guild_users AS gu ON gu.user_id = up.user_id  " +
-                  $"WHERE gu.guild_id = @guildId AND time_played > current_date - interval '{amountOfDays}' day " +
+                  $"WHERE gu.guild_id = @guildId AND time_played > current_date - interval '{amountOfDays}' day AND artist_name IS NOT NULL " +
                   "GROUP BY up.user_id, artist_name " +
                   ") as subquery " +
                   $"WHERE pos <= {amount}; ";

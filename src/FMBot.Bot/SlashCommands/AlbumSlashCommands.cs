@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Discord;
 using Discord.Interactions;
+using Discord.WebSocket;
 using Fergun.Interactive;
 using FMBot.Bot.Attributes;
 using FMBot.Bot.AutoCompleteHandlers;
@@ -10,6 +12,7 @@ using FMBot.Bot.Extensions;
 using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
+using FMBot.Domain;
 using FMBot.Domain.Models;
 
 namespace FMBot.Bot.SlashCommands;
@@ -34,6 +37,8 @@ public class AlbumSlashCommands : InteractionModuleBase
 
     [SlashCommand("album", "Shows album info for the album you're currently listening to or searching for")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task AlbumAsync(
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))] string name = null)
@@ -147,6 +152,8 @@ public class AlbumSlashCommands : InteractionModuleBase
 
     [SlashCommand("fwkalbum", "Shows who of your friends listen to an album")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task FriendsWhoKnowAlbumAsync(
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))]
@@ -208,8 +215,10 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
     }
 
-    [SlashCommand("cover", "Cover for current album or the one you're searching for.")]
+    [SlashCommand("cover", "Cover for current album or the one you're searching for")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task AlbumCoverAsync(
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))] string name = null)
@@ -262,8 +271,49 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
     }
 
+    [ComponentInteraction($"{InteractionConstants.Album.RandomCover}-*-*")]
+    [UsernameSetRequired]
+    public async Task RandomAlbumCoverAsync(string discordUser, string requesterDiscordUser)
+    {
+        var discordUserId = ulong.Parse(discordUser);
+        var requesterDiscordUserId = ulong.Parse(requesterDiscordUser);
+
+        if (this.Context.User.Id != requesterDiscordUserId)
+        {
+            await RespondAsync("🎲 Sorry, only the user that requested the random cover can reroll.", ephemeral: true);
+            return;
+        }
+
+        _ = DeferAsync();
+        await this.Context.DisableInteractionButtons();
+
+        var contextUser = await this._userService.GetUserWithDiscogs(requesterDiscordUserId);
+        var discordContextUser = await this.Context.Client.GetUserAsync(requesterDiscordUserId);
+        var userSettings = await this._settingService.GetOriginalContextUser(discordUserId, requesterDiscordUserId, this.Context.Guild, this.Context.User);
+
+        try
+        {
+            var response = await this._albumBuilders.CoverAsync(new ContextModel(this.Context, contextUser, discordContextUser), userSettings, "random");
+
+            await this.Context.UpdateInteractionEmbed(response, this.Interactivity, false);
+            this.Context.LogCommandUsed(response.CommandResponse);
+
+            var message = (this.Context.Interaction as SocketMessageComponent)?.Message;
+            if (message != null && response.ReferencedMusic != null && PublicProperties.UsedCommandsResponseContextId.TryGetValue(message.Id, out var contextId))
+            {
+                await this._userService.UpdateInteractionContext(contextId, response.ReferencedMusic);
+            }
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [SlashCommand("albumtracks", "Shows album info for the album you're currently listening to or searching for")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task AlbumTracksAsync(
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))] string name = null,
@@ -318,8 +368,10 @@ public class AlbumSlashCommands : InteractionModuleBase
         }
     }
 
-    [SlashCommand("albumplays", "Shows playcount for current album or the one you're searching for.")]
+    [SlashCommand("albumplays", "Shows playcount for current album or the one you're searching for")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task AlbumPlaysAsync(
         [Summary("Album", "The album your want to search for (defaults to currently playing)")]
         [Autocomplete(typeof(AlbumAutoComplete))] string name = null,

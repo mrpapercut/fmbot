@@ -22,8 +22,11 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Domain;
 using FMBot.Domain.Models;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Web.InternalApi;
+using Enum = System.Enum;
 using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
 
 namespace FMBot.Bot.TextCommands;
@@ -39,6 +42,9 @@ public class StaticCommands : BaseCommandModule
     private readonly UserService _userService;
     private readonly MusicBotService _musicBotService;
     private readonly StaticBuilders _staticBuilders;
+    private readonly StatusHandler.StatusHandlerClient _statusHandler;
+    private readonly DiscordShardedClient _client;
+
     private InteractiveService Interactivity { get; }
 
     private static readonly List<DateTimeOffset> StackCooldownTimer = new();
@@ -54,7 +60,9 @@ public class StaticCommands : BaseCommandModule
         IOptions<BotSettings> botSettings,
         InteractiveService interactivity,
         MusicBotService musicBotService,
-        StaticBuilders staticBuilders) : base(botSettings)
+        StaticBuilders staticBuilders,
+        StatusHandler.StatusHandlerClient statusHandler,
+        DiscordShardedClient client) : base(botSettings)
     {
         this._friendService = friendsService;
         this._guildService = guildService;
@@ -65,6 +73,8 @@ public class StaticCommands : BaseCommandModule
         this.Interactivity = interactivity;
         this._musicBotService = musicBotService;
         this._staticBuilders = staticBuilders;
+        this._statusHandler = statusHandler;
+        this._client = client;
     }
 
     [Command("invite", RunMode = RunMode.Async)]
@@ -130,17 +140,17 @@ public class StaticCommands : BaseCommandModule
         var embedDescription = new StringBuilder();
         this._embed.WithColor(DiscordConstants.InformationColorBlue);
 
-        embedDescription.AppendLine(".fmbot is open-source, non-profit and maintained by volunteers.");
-        embedDescription.AppendLine("The bot is written in C#, uses .NET 7 and Discord.Net.");
+        embedDescription.AppendLine(".fmbot is a source-available Discord bot.");
+        embedDescription.AppendLine("The bot is written in C#, uses .NET 8 and Discord.Net.");
 
         this._embed.WithDescription(embedDescription.ToString());
 
         this._embed.AddField("Links",
-            "[Main repository](https://github.com/fmbot-discord/fmbot/)\n" +
+            "[Main GitHub repository](https://github.com/fmbot-discord/fmbot/)\n" +
             "[Docs repository](https://github.com/fmbot-discord/docs)\n" +
             "[File an issue](https://github.com/fmbot-discord/fmbot/issues/new/choose)\n" +
-            "[Development instructions](https://fmbot.xyz/setup/)\n" +
-            "[OpenCollective](https://opencollective.com/fmbot)");
+            "[Development](https://fmbot.xyz/setup/)\n" +
+            "[Supporter](https://fmbot.xyz/supporter)");
 
         await this.Context.Channel.SendMessageAsync("", false, this._embed.Build());
         this.Context.LogCommandUsed();
@@ -186,7 +196,7 @@ public class StaticCommands : BaseCommandModule
         this._embed.WithColor(DiscordConstants.InformationColorBlue);
 
         this._embedAuthor.WithIconUrl(selfUser.GetAvatarUrl());
-        this._embedAuthor.WithName(selfUser.Username);
+        this._embedAuthor.WithName($"{selfUser.Username}");
         this._embedAuthor.WithUrl("https://fmbot.xyz/");
 
         this._embed.WithAuthor(this._embedAuthor);
@@ -199,24 +209,62 @@ public class StaticCommands : BaseCommandModule
 
         var client = this.Context.Client as DiscordShardedClient;
 
-        var assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version.ToString();
-
         var ticks = Stopwatch.GetTimestamp();
         var upTime = (double)ticks / Stopwatch.Frequency;
         var upTimeInSeconds = TimeSpan.FromSeconds(upTime);
 
         var description = "";
-        description += $"**Bot Uptime:** `{startTime.ToReadableString()}`\n";
+        description += $"**Current Instance:** `{ConfigData.Data.Shards?.InstanceName}`\n";
+        description += $"**Instance Uptime:** `{startTime.ToReadableString()}`\n";
         description += $"**Server Uptime:** `{upTimeInSeconds.ToReadableString()}`\n";
         description += $"**Usercount:** `{await this._userService.GetTotalUserCountAsync()}`  (Authorized: `{await this._userService.GetTotalAuthorizedUserCountAsync()}` | Discord: `{client.Guilds.Select(s => s.MemberCount).Sum()}`)\n";
         description += $"**Friendcount:** `{await this._friendService.GetTotalFriendCountAsync()}`\n";
         description += $"**Servercount:** `{client.Guilds.Count}`  (Shards: `{client.Shards.Count}` (`{client.GetShardIdFor(this.Context.Guild)}`))\n";
-        description += $"**MusicBrainz API calls:** `{Statistics.MusicBrainzApiCalls.Value}`\n";
-        description += $"**Botscrobbles:** `{Statistics.LastfmScrobbles.Value}`  (Now playing updates: `{Statistics.LastfmNowPlayingUpdates.Value}`)\n";
         description += $"**Memory usage:** `{currentMemoryUsage.ToFormattedByteString()}`  (Peak: `{peakMemoryUsage.ToFormattedByteString()}`)\n";
-        description += $"**Average shard latency:** `{Math.Round(client.Shards.Select(s => s.Latency).Average(), 2) + "ms`"}\n";
-        //description += $"**Bot version:** `{assemblyVersion}`\n";
-        //description += $"**Self-hosted:** `{IsBotSelfHosted(this.Context.Client.CurrentUser.Id).ToString()}`\n";
+
+        var instanceOverviewDescription = new StringBuilder();
+        try
+        {
+            var instanceOverview = await this._statusHandler.GetOverviewAsync(new Empty());
+
+            foreach (var instance in instanceOverview.Instances.OrderBy(o => o.InstanceName))
+            {
+                if (instance.LastHeartbeat.ToDateTime() >= DateTime.UtcNow.AddSeconds(-30))
+                {
+                    instanceOverviewDescription.Append(
+                        $"{DiscordConstants.OneToFiveUp}");
+                }
+                else if (instance.LastHeartbeat.ToDateTime() >= DateTime.UtcNow.AddMinutes(-1))
+                {
+                    instanceOverviewDescription.Append(
+                        $"{DiscordConstants.SamePosition}");
+                }
+                else
+                {
+                    instanceOverviewDescription.Append(
+                        $"{DiscordConstants.OneToFiveDown}");
+                }
+                
+                instanceOverviewDescription.Append(
+                    $" `{instance.InstanceName}`");
+                instanceOverviewDescription.Append(
+                    $" - {instance.ConnectedGuilds}/{instance.TotalGuilds} guilds");
+                instanceOverviewDescription.Append(
+                    $" - {instance.ConnectedShards}/{instance.TotalShards} shards");
+                instanceOverviewDescription.Append(
+                    $" - {instance.MemoryBytesUsed.ToFormattedByteString()}");
+                instanceOverviewDescription.Append(
+                    $" - <t:{instance.LastHeartbeat.ToDateTime().ToUnixEpochDate()}:R>");
+                instanceOverviewDescription.AppendLine();
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Error("Error in gRPC status fetch, {exceptionMessage}", e.Message, e);
+            instanceOverviewDescription.AppendLine("Error");
+        }
+
+        this._embed.AddField("Instance heartbeat overview - connected/total", instanceOverviewDescription);
 
         this._embed.WithDescription(description);
 

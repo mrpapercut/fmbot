@@ -12,12 +12,12 @@ using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using Fergun.Interactive;
-using FMBot.Domain.Enums;
 using System.Collections.Generic;
 using Discord;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Resources;
-using FMBot.Bot.Services.ThirdParty;
+using Discord.Interactions;
+using FMBot.Bot.Factories;
 
 namespace FMBot.Bot.Builders;
 
@@ -28,16 +28,21 @@ public class CrownBuilders
     private readonly ArtistsService _artistsService;
     private readonly GuildService _guildService;
     private readonly IDataSourceFactory _dataSourceFactory;
-    private readonly SpotifyService _spotifyService;
-
-    public CrownBuilders(CrownService crownService, ArtistsService artistsService, IDataSourceFactory dataSourceFactory, UserService userService, GuildService guildService, SpotifyService spotifyService)
+    private readonly MusicDataFactory _musicDataFactory;
+    
+    public CrownBuilders(CrownService crownService,
+        ArtistsService artistsService,
+        IDataSourceFactory dataSourceFactory,
+        UserService userService,
+        GuildService guildService,
+        MusicDataFactory musicDataFactory)
     {
         this._crownService = crownService;
         this._artistsService = artistsService;
         this._dataSourceFactory = dataSourceFactory;
         this._userService = userService;
         this._guildService = guildService;
-        this._spotifyService = spotifyService;
+        this._musicDataFactory = musicDataFactory;
     }
 
     public async Task<ResponseModel> CrownAsync(
@@ -74,13 +79,14 @@ public class CrownBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistValues,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm,
-            userId: context.ContextUser.UserId, interactionId: context.InteractionId);
+            userId: context.ContextUser.UserId, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName);
+        var cachedArtist = await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName);
 
         var artistCrowns = await this._crownService.GetCrownsForArtist(guild.GuildId, artistSearch.Artist.ArtistName);
 
@@ -244,23 +250,6 @@ public class CrownBuilders
 
             footer.AppendLine($"Page {pageCounter}/{crownPages.Count} - {userCrowns.Count} total crowns");
 
-            switch (crownViewType)
-            {
-                case CrownViewType.Playcount:
-                    footer.AppendLine("Actively held crowns ordered by playcount");
-                    break;
-                case CrownViewType.Recent:
-                    footer.AppendLine("Active crowns that were recently claimed");
-                    break;
-                case CrownViewType.Stolen:
-                    footer.AppendLine("Expired crowns that have recently been stolen");
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
-
-            footer.AppendLine("Available options: playcount, recent and stolen");
-
             pages.Add(new PageBuilder()
                 .WithDescription(crownPageString.ToString())
                 .WithTitle(title)
@@ -268,7 +257,23 @@ public class CrownBuilders
             pageCounter++;
         }
 
-        response.StaticPaginator = StringService.BuildStaticPaginator(pages);
+        var viewType = new SelectMenuBuilder()
+            .WithPlaceholder("Select crown view")
+            .WithCustomId(InteractionConstants.User.CrownSelectMenu)
+            .WithMinValues(1)
+            .WithMaxValues(1);
+
+        foreach (var option in ((CrownViewType[])Enum.GetValues(typeof(CrownViewType))))
+        {
+            var name = option.GetAttribute<ChoiceDisplayAttribute>().Name;
+            var value = $"{userSettings.DiscordUserId}-{context.ContextUser.DiscordUserId}-{Enum.GetName(option)}";
+
+            var active = option == crownViewType;
+
+            viewType.AddOption(new SelectMenuOptionBuilder(name, value, null, isDefault: active));
+        }
+
+        response.StaticPaginator = StringService.BuildStaticPaginatorWithSelectMenu(pages, viewType);
 
         return response;
     }

@@ -5,6 +5,8 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Dapper;
 using Discord;
+using FMBot.Bot.Extensions;
+using FMBot.Bot.Factories;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Models;
 using FMBot.Bot.Services.WhoKnows;
@@ -18,11 +20,13 @@ using FMBot.Domain.Types;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using FMBot.Persistence.Repositories;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Serilog;
+using Web.InternalApi;
 
 namespace FMBot.Bot.Services;
 
@@ -36,6 +40,8 @@ public class AlbumService
     private readonly IDbContextFactory<FMBotDbContext> _contextFactory;
     private readonly IUpdateService _updateService;
     private readonly AliasService _aliasService;
+    private readonly UserService _userService;
+    private readonly AlbumEnrichment.AlbumEnrichmentClient _albumEnrichment;
 
     public AlbumService(IMemoryCache cache,
         IOptions<BotSettings> botSettings,
@@ -44,7 +50,9 @@ public class AlbumService
         WhoKnowsAlbumService whoKnowsAlbumService,
         IDbContextFactory<FMBotDbContext> contextFactory,
         IUpdateService updateService,
-        AliasService aliasService)
+        AliasService aliasService,
+        UserService userService,
+        AlbumEnrichment.AlbumEnrichmentClient albumEnrichment)
     {
         this._cache = cache;
         this._dataSourceFactory = dataSourceFactory;
@@ -53,13 +61,27 @@ public class AlbumService
         this._contextFactory = contextFactory;
         this._updateService = updateService;
         this._aliasService = aliasService;
+        this._userService = userService;
+        this._albumEnrichment = albumEnrichment;
         this._botSettings = botSettings.Value;
     }
 
     public async Task<AlbumSearch> SearchAlbum(ResponseModel response, IUser discordUser, string albumValues, string lastFmUserName, string sessionKey = null,
-            string otherUserUsername = null, bool useCachedAlbums = false, int? userId = null, ulong? interactionId = null)
+            string otherUserUsername = null, bool useCachedAlbums = false, int? userId = null, ulong? interactionId = null, IUserMessage referencedMessage = null, bool redirectsEnabled = true)
     {
         string searchValue;
+        if (referencedMessage != null && string.IsNullOrWhiteSpace(albumValues))
+        {
+            var internalLookup = CommandContextExtensions.GetReferencedMusic(referencedMessage.Id)
+                                 ??
+                                 await this._userService.GetReferencedMusic(referencedMessage.Id);
+
+            if (internalLookup?.Album != null)
+            {
+                albumValues = $"{internalLookup.Artist} | {internalLookup.Album}";
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(albumValues) && albumValues.Length != 0)
         {
             searchValue = albumValues;
@@ -99,7 +121,7 @@ public class AlbumService
                 Response<AlbumInfo> albumInfo;
                 if (useCachedAlbums)
                 {
-                    albumInfo = await GetCachedAlbum(searchArtistName, searchAlbumName, lastFmUserName, userId);
+                    albumInfo = await GetCachedAlbum(searchArtistName, searchAlbumName, lastFmUserName, userId, redirectsEnabled);
                 }
                 else
                 {
@@ -111,6 +133,11 @@ public class AlbumService
                 {
                     PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, searchArtistName);
                     PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, searchAlbumName);
+                    response.ReferencedMusic = new ReferencedMusic
+                    {
+                        Artist = searchArtistName,
+                        Album = searchAlbumName
+                    };
                 }
 
                 if (!albumInfo.Success && albumInfo.Error == ResponseStatus.MissingParameters)
@@ -182,6 +209,11 @@ public class AlbumService
             {
                 PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, lastPlayedTrack.ArtistName);
                 PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, lastPlayedTrack.AlbumName);
+                response.ReferencedMusic = new ReferencedMusic
+                {
+                    Artist = lastPlayedTrack.ArtistName,
+                    Album = lastPlayedTrack.AlbumName
+                };
             }
 
             if (albumInfo?.Content == null || !albumInfo.Success)
@@ -222,7 +254,16 @@ public class AlbumService
             if (interactionId.HasValue)
             {
                 PublicProperties.UsedCommandsArtists.TryAdd(interactionId.Value, albumInfo.Content.ArtistName);
-                PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, albumInfo.Content.AlbumName);
+                if (albumInfo.Content.AlbumName != null)
+                {
+                    PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, albumInfo.Content.AlbumName);
+                }
+
+                response.ReferencedMusic = new ReferencedMusic
+                {
+                    Artist = albumInfo.Content.ArtistName,
+                    Album = albumInfo.Content.AlbumName
+                };
             }
 
             return new AlbumSearch(albumInfo.Content, response);
@@ -243,10 +284,11 @@ public class AlbumService
         return new AlbumSearch(null, response);
     }
 
-    private async Task<Response<AlbumInfo>> GetCachedAlbum(string artistName, string albumName, string lastFmUserName, int? userId = null)
+    private async Task<Response<AlbumInfo>> GetCachedAlbum(string artistName, string albumName, string lastFmUserName, int? userId = null,
+        bool redirectsEnabled = true)
     {
         Response<AlbumInfo> albumInfo;
-        var cachedAlbum = await GetAlbumFromDatabase(artistName, albumName);
+        var cachedAlbum = await GetAlbumFromDatabase(artistName, albumName, redirectsEnabled);
         if (cachedAlbum != null)
         {
             albumInfo = new Response<AlbumInfo>
@@ -265,7 +307,7 @@ public class AlbumService
         else
         {
             albumInfo = await this._dataSourceFactory.GetAlbumInfoAsync(artistName, albumName,
-                lastFmUserName);
+                lastFmUserName, redirectsEnabled);
         }
 
         return albumInfo;
@@ -273,56 +315,116 @@ public class AlbumService
 
     public async Task<List<TopAlbum>> FillMissingAlbumCovers(List<TopAlbum> topAlbums)
     {
-        if (topAlbums.All(a => a.AlbumCoverUrl != null))
+        var request = new AlbumRequest
         {
-            return topAlbums;
-        }
-
-        await CacheAllAlbumCovers();
-
-        foreach (var topAlbum in topAlbums.Where(w => w.AlbumCoverUrl == null))
-        {
-            var albumCover = (string)this._cache.Get(CacheKeyForAlbumCover(topAlbum.ArtistName, topAlbum.AlbumName));
-
-            if (albumCover != null)
+            Albums =
             {
-                topAlbum.AlbumCoverUrl = albumCover;
+                topAlbums.Select(s => new AlbumWithCover
+                {
+                    ArtistName = s.ArtistName,
+                    AlbumName = s.AlbumName,
+                    AlbumCoverUrl = s.AlbumCoverUrl ?? ""
+                })
+            }
+        };
+
+        var albums = await this._albumEnrichment.AddMissingAlbumCoversAsync(request);
+
+        var albumDict = albums.Albums
+            .Where(a => !string.IsNullOrWhiteSpace(a.AlbumCoverUrl))
+            .GroupBy(a => (a.AlbumName.ToLower(), a.ArtistName.ToLower()))
+            .ToDictionary(
+                g => g.Key,
+                g => g.First(f => f.AlbumCoverUrl != null)
+            );
+
+        foreach (var topAlbum in topAlbums)
+        {
+            if (topAlbum.AlbumCoverUrl == null)
+            {
+                var key = (topAlbum.AlbumName.ToLower(), topAlbum.ArtistName.ToLower());
+                if (albumDict.TryGetValue(key, out var coverUrl))
+                {
+                    topAlbum.AlbumCoverUrl = coverUrl.AlbumCoverUrl;
+                }
             }
         }
 
         return topAlbums;
     }
 
-    private async Task CacheAllAlbumCovers()
+    public async Task<Response<TopAlbumList>> FilterAlbumToReleaseYear(Response<TopAlbumList> albums, int year)
     {
-        const string cacheKey = "album-covers";
-        var cacheTime = TimeSpan.FromMinutes(5);
+        await EnrichTopAlbums(albums.Content.TopAlbums);
 
-        if (this._cache.TryGetValue(cacheKey, out _))
-        {
-            return;
-        }
+        var yearStart = new DateTime(year, 1, 1);
+        var yearEnd = yearStart.AddYears(1).AddSeconds(-1);
+        albums.Content.TopAlbums = albums.Content.TopAlbums
+            .Where(w => w.ReleaseDate.HasValue &&
+                        w.ReleaseDate.Value >= yearStart &&
+                        w.ReleaseDate.Value <= yearEnd)
+            .ToList();
 
-        const string sql = "SELECT LOWER(lastfm_image_url) as lastfm_image_url, LOWER(spotify_image_url) as spotify_image_url, LOWER(artist_name) as artist_name, LOWER(name) as album_name " +
-                           "FROM public.albums where (spotify_image_url is not null or lastfm_image_url is not null);";
+        DataSourceFactory.AddAlbumTopList(albums, null);
 
-        DefaultTypeMap.MatchNamesWithUnderscores = true;
-        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
-        await connection.OpenAsync();
-
-        var albumCovers = (await connection.QueryAsync<AlbumCoverDto>(sql)).ToList();
-
-        foreach (var cover in albumCovers)
-        {
-            this._cache.Set(CacheKeyForAlbumCover(cover.ArtistName, cover.AlbumName), cover.LastfmImageUrl ?? cover.SpotifyImageUrl, cacheTime);
-        }
-
-        this._cache.Set(cacheKey, true, cacheTime);
+        return albums;
     }
 
-    public static string CacheKeyForAlbumCover(string artist, string album)
+    public async Task<Response<TopAlbumList>> FilterAlbumToReleaseDecade(Response<TopAlbumList> albums, int decade)
     {
-        return $"ab-co-{album.ToLower()}-{artist.ToLower()}";
+        await EnrichTopAlbums(albums.Content.TopAlbums);
+
+        var decadeStart = new DateTime(decade, 1, 1);
+        var decadeEnd = decadeStart.AddYears(10).AddSeconds(-1);
+        albums.Content.TopAlbums = albums.Content.TopAlbums
+            .Where(w => w.ReleaseDate.HasValue &&
+                        w.ReleaseDate.Value >= decadeStart &&
+                        w.ReleaseDate.Value <= decadeEnd)
+            .ToList();
+
+        DataSourceFactory.AddAlbumTopList(albums, null);
+
+        return albums;
+    }
+
+    private async Task EnrichTopAlbums(IReadOnlyCollection<TopAlbum> list)
+    {
+        var minTimestamp = Timestamp.FromDateTime(DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc));
+        var request = new AlbumReleaseDateRequest
+        {
+            Albums =
+            {
+                list.Select(s => new AlbumWithDate
+                {
+                    ArtistName = s.ArtistName,
+                    AlbumName = s.AlbumName,
+                    ReleaseDate = minTimestamp,
+                    ReleaseDatePrecision = s.ReleaseDatePrecision ?? ""
+                })
+            }
+        };
+
+        var albums = await this._albumEnrichment.AddAlbumReleaseDatesAsync(request);
+
+        var albumGroups = albums.Albums
+            .Where(a => a.ReleaseDate != minTimestamp)
+            .GroupBy(a => (a.AlbumName.ToLower(), a.ArtistName.ToLower()))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        foreach (var topAlbum in list.Where(w => w.ReleaseDate == null))
+        {
+            var key = (topAlbum.AlbumName.ToLower(), topAlbum.ArtistName.ToLower());
+
+            if (albumGroups.TryGetValue(key, out var matchedAlbums))
+            {
+                var album = matchedAlbums.FirstOrDefault();
+                if (album != null)
+                {
+                    topAlbum.ReleaseDate = album.ReleaseDate.ToDateTime();
+                    topAlbum.ReleaseDatePrecision = album.ReleaseDatePrecision;
+                }
+            }
+        }
     }
 
     public async Task<Album> GetAlbumForId(int albumId)
@@ -332,7 +434,7 @@ public class AlbumService
         return await db.Albums.FindAsync(albumId);
     }
 
-    public async Task<Album> GetAlbumFromDatabase(string artistName, string albumName)
+    public async Task<Album> GetAlbumFromDatabase(string artistName, string albumName, bool redirectsEnabled = true)
     {
         if (string.IsNullOrWhiteSpace(artistName) || string.IsNullOrWhiteSpace(albumName))
         {
@@ -342,7 +444,7 @@ public class AlbumService
         var alias = await this._aliasService.GetAlias(artistName);
 
         var correctedArtistName = artistName;
-        if (alias != null && !alias.Options.HasFlag(AliasOption.NoRedirectInLastfmCalls))
+        if (alias != null && !alias.Options.HasFlag(AliasOption.NoRedirectInLastfmCalls) && redirectsEnabled)
         {
             correctedArtistName = alias.ArtistName;
         }
@@ -384,9 +486,11 @@ public class AlbumService
         var freshTopAlbums = (await AlbumRepository.GetUserAlbums(userId, connection))
             .Select(s => new TopAlbum()
             {
-                ArtistName = s.Name,
+                ArtistName = s.ArtistName,
                 AlbumName = s.Name,
-                UserPlaycount = s.Playcount
+                UserPlaycount = s.Playcount,
+                ArtistUrl = LastfmUrlExtensions.GetArtistUrl(s.ArtistName),
+                AlbumUrl = LastfmUrlExtensions.GetAlbumUrl(s.ArtistName, s.Name),
             })
             .OrderByDescending(o => o.UserPlaycount)
             .ToList();

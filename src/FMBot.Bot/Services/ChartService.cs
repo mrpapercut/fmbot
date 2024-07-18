@@ -2,9 +2,9 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Discord;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Models;
 using FMBot.Domain;
@@ -98,9 +98,9 @@ public class ChartService
                     SKBitmap chartImage;
                     var validImage = true;
 
-                    var localPath = AlbumUrlToCacheFilePath(album.AlbumUrl);
+                    var localPath = AlbumUrlToCacheFilePath(album.AlbumName, album.ArtistName);
 
-                    if (File.Exists(localPath) && cacheEnabled)
+                    if (localPath != null && File.Exists(localPath) && cacheEnabled)
                     {
                         chartImage = SKBitmap.Decode(localPath);
                         Statistics.LastfmCachedImageCalls.Inc();
@@ -320,17 +320,25 @@ public class ChartService
         }
     }
 
-    public static string AlbumUrlToCacheFilePath(string albumUrl)
+    public static string AlbumUrlToCacheFilePath(string albumName, string artistName)
     {
-        var encodedId = StringExtensions.ReplaceInvalidChars(albumUrl.Replace("https://www.last.fm/music/", ""));
-        var localAlbumId = StringExtensions.TruncateLongString($"album_{encodedId}", 80);
+        var encodedId = EncodeToBase64($"{StringExtensions.TruncateLongString(albumName, 80)}--{StringExtensions.TruncateLongString(artistName, 40)}");
+        var localAlbumId = StringExtensions.TruncateLongString($"album_{encodedId}", 100);
 
         var fileName = localAlbumId + ".png";
         var localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", fileName);
         return localPath;
     }
 
-    private static async Task SaveImageToCache(SKBitmap chartImage, string localPath)
+    private static string EncodeToBase64(string input)
+    {
+        var bytes = Encoding.UTF8.GetBytes(input);
+        var value = Convert.ToBase64String(bytes);
+
+        return StringExtensions.ReplaceInvalidChars(value);
+    }
+
+    public static async Task SaveImageToCache(SKBitmap chartImage, string localPath)
     {
         using var image = SKImage.FromBitmap(chartImage);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
@@ -501,7 +509,8 @@ public class ChartService
         bitmapCanvas.DrawText(album.AlbumName, 4, 22, textPaint);
     }
 
-    public ChartSettings SetSettings(ChartSettings currentChartSettings, string[] extraOptions)
+    public ChartSettings SetSettings(ChartSettings currentChartSettings, string[] extraOptions,
+        UserSettingsModel userSettings, bool aoty = false, bool aotd = false)
     {
         var chartSettings = currentChartSettings;
         chartSettings.CustomOptionsEnabled = false;
@@ -556,7 +565,104 @@ public class ChartService
             optionsAsString = string.Join(" ", extraOptions);
         }
 
-        var timeSettings = SettingService.GetTimePeriod(optionsAsString);
+        if (aoty)
+        {
+            var year = SettingService.GetYear(optionsAsString);
+            if (year != null)
+            {
+                chartSettings.ReleaseYearFilter = year;
+                optionsAsString = optionsAsString.Replace($"{year}", "");
+            }
+            else
+            {
+                chartSettings.ReleaseYearFilter = DateTime.UtcNow.Year;
+            }
+
+            chartSettings.CustomOptionsEnabled = true;
+        }
+
+        if (aotd)
+        {
+            var aotdFound = false;
+            foreach (var option in extraOptions)
+            {
+                var cleaned = option
+                    .Replace("d:", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("decade:", "", StringComparison.OrdinalIgnoreCase)
+                    .TrimEnd('s')
+                    .TrimEnd('S');
+
+                if (int.TryParse(cleaned, out var year))
+                {
+                    if (year < 100)
+                    {
+                        year += year < 30 ? 2000 : 1900;
+                    }
+
+                    year = (year / 10) * 10;
+
+                    if (year <= DateTime.UtcNow.Year && year >= 1900)
+                    {
+                        chartSettings.CustomOptionsEnabled = true;
+                        chartSettings.ReleaseDecadeFilter = year;
+                        aotdFound = true;
+                    }
+                }
+            }
+            if (!aotdFound)
+            {
+                chartSettings.ReleaseDecadeFilter = (DateTime.UtcNow.Year / 10) * 10;
+            }
+
+            chartSettings.CustomOptionsEnabled = true;
+        }
+
+        foreach (var option in extraOptions)
+        {
+            if (option.StartsWith("r:", StringComparison.OrdinalIgnoreCase) ||
+                option.StartsWith("released:", StringComparison.OrdinalIgnoreCase))
+            {
+                var yearString = option
+                    .Replace("r:", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("released:", "", StringComparison.OrdinalIgnoreCase);
+
+                var year = SettingService.GetYear(yearString);
+                if (year != null)
+                {
+                    chartSettings.CustomOptionsEnabled = true;
+                    chartSettings.ReleaseYearFilter = year;
+                    aoty = true;
+                }
+            }
+            if (option.StartsWith("d:", StringComparison.OrdinalIgnoreCase) ||
+                option.StartsWith("decade:", StringComparison.OrdinalIgnoreCase))
+            {
+                var yearString = option
+                    .Replace("d:", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("decade:", "", StringComparison.OrdinalIgnoreCase)
+                    .TrimEnd('s')
+                    .TrimEnd('S');
+
+                if (int.TryParse(yearString, out var year))
+                {
+                    if (year < 100)
+                    {
+                        year += year < 30 ? 2000 : 1900;
+                    }
+
+                    year = (year / 10) * 10;
+
+                    if (year <= DateTime.UtcNow.Year && year >= 1900)
+                    {
+                        chartSettings.CustomOptionsEnabled = true;
+                        chartSettings.ReleaseDecadeFilter = year;
+                        aotd = true;
+                    }
+                }
+            }
+        }
+
+        var timeSettings = SettingService.GetTimePeriod(optionsAsString, aoty || aotd ? TimePeriod.AllTime : TimePeriod.Weekly, timeZone: userSettings.TimeZone);
 
         chartSettings.TimeSettings = timeSettings;
         chartSettings.TimespanString = timeSettings.Description;
@@ -591,6 +697,14 @@ public class ChartService
         if (chartSettings.CustomOptionsEnabled)
         {
             embedDescription += "Chart options:\n";
+        }
+        if (chartSettings.ReleaseYearFilter.HasValue)
+        {
+            embedDescription += $"- Filtering to albums released in {chartSettings.ReleaseYearFilter.Value}\n";
+        }
+        if (chartSettings.ReleaseDecadeFilter.HasValue)
+        {
+            embedDescription += $"- Filtering to albums released in the {chartSettings.ReleaseDecadeFilter.Value}s\n";
         }
         if (chartSettings.SkipWithoutImage)
         {

@@ -53,6 +53,7 @@ public class AdminCommands : BaseCommandModule
     private readonly AliasService _aliasService;
     private readonly WhoKnowsFilterService _whoKnowsFilterService;
     private readonly PlayService _playService;
+    private readonly DiscordShardedClient _client;
 
     private InteractiveService Interactivity { get; }
 
@@ -75,7 +76,7 @@ public class AdminCommands : BaseCommandModule
         ArtistsService artistsService,
         AliasService aliasService,
         WhoKnowsFilterService whoKnowsFilterService,
-        PlayService playService) : base(botSettings)
+        PlayService playService, DiscordShardedClient client) : base(botSettings)
     {
         this._adminService = adminService;
         this._censorService = censorService;
@@ -95,6 +96,7 @@ public class AdminCommands : BaseCommandModule
         this._aliasService = aliasService;
         this._whoKnowsFilterService = whoKnowsFilterService;
         this._playService = playService;
+        this._client = client;
     }
 
     //[Command("debug")]
@@ -103,7 +105,7 @@ public class AdminCommands : BaseCommandModule
     //public async Task DebugAsync(IUser user = null)
     //{
     //    var chosenUser = user ?? this.Context.Message.Author;
-    //    var userSettings = await this._userService.GetFullUserAsync(chosenUser);
+    //    var userSettings = await this._userService.GetFullUserAsync(chosenUser.Id);
 
     //    if (userSettings?.UserNameLastFM == null)
     //    {
@@ -114,34 +116,10 @@ public class AdminCommands : BaseCommandModule
 
     //    this._embed.WithTitle($"Debug for {chosenUser.ToString()}");
 
-    //    var description = "";
-    //    foreach (PropertyDescriptor descriptor in TypeDescriptor.GetProperties(userSettings))
-    //    {
-    //        var name = descriptor.Name;
-    //        var value = descriptor.GetValue(userSettings);
-
-    //        if (descriptor.PropertyType.Name == "ICollection`1")
-    //        {
-    //            continue;
-    //        }
-
-    //        if (value != null)
-    //        {
-    //            description += $"{name}: `{value}` \n";
-    //        }
-    //        else
-    //        {
-    //            description += $"{name}: null \n";
-    //        }
-    //    }
-
-    //    description += $"Friends: `{userSettings.Friends.Count}`\n";
-    //    description += $"Befriended by: `{userSettings.FriendedByUsers.Count}`\n";
-    //    //description += $"Indexed artists: `{userSettings.Artists.Count}`";
-    //    //description += $"Indexed albums: `{userSettings.Albums.Count}`";
-    //    //description += $"Indexed tracks: `{userSettings.Tracks.Count}`";
+    //    var description = new StringBuilder();
 
     //    this._embed.WithDescription(description);
+    //    this._embed.WithFooter("")
     //    await ReplyAsync("", false, this._embed.Build()).ConfigureAwait(false);
     //    this.Context.LogCommandUsed();
     //}
@@ -234,6 +212,35 @@ public class AdminCommands : BaseCommandModule
                 await ReplyAsync("Disabled issue mode");
             }
 
+            this.Context.LogCommandUsed();
+        }
+        else
+        {
+            await ReplyAsync(Constants.FmbotStaffOnly);
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+        }
+    }
+
+    [Command("leaveserver")]
+    [Summary("Makes the bot leave a server")]
+    [Alias("leaveguild")]
+    public async Task LeaveGuild([Remainder] string reason = null)
+    {
+        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Owner))
+        {
+            _ = this.Context.Channel.TriggerTypingAsync();
+
+            if (!ulong.TryParse(reason, out var id))
+            {
+                await ReplyAsync("Invalid guild ID");
+                this.Context.LogCommandUsed();
+                return;
+            }
+
+            var guildToLeave = await this._client.Rest.GetGuildAsync(id);
+            await guildToLeave.LeaveAsync();
+
+            await ReplyAsync("Left guild (if the bot was in there)");
             this.Context.LogCommandUsed();
         }
         else
@@ -455,7 +462,7 @@ public class AdminCommands : BaseCommandModule
     [Command("opencollectivesupporters", RunMode = RunMode.Async)]
     [Summary("Displays all .fmbot supporters.")]
     [Alias("ocsupporters")]
-    public async Task OpenCollectiveSupportersAsync()
+    public async Task OpenCollectiveSupportersAsync([Remainder] string extraOptions = null)
     {
         if (!await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
         {
@@ -469,10 +476,18 @@ public class AdminCommands : BaseCommandModule
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
         var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-        var response = await this._staticBuilders.OpenCollectiveSupportersAsync(new ContextModel(this.Context, prfx, userSettings));
+        try
+        {
+            var response = await this._staticBuilders.OpenCollectiveSupportersAsync(new ContextModel(this.Context, prfx, userSettings), extraOptions == "expired");
 
-        await this.Context.SendResponse(this.Interactivity, response);
-        this.Context.LogCommandUsed(response.CommandResponse);
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
+        }
     }
 
     [Command("discordsupporters", RunMode = RunMode.Async)]
@@ -491,11 +506,17 @@ public class AdminCommands : BaseCommandModule
 
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
         var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
+        try
+        {
+            var response = await this._staticBuilders.DiscordSupportersAsync(new ContextModel(this.Context, prfx, userSettings));
 
-        var response = await this._staticBuilders.DiscordSupportersAsync(new ContextModel(this.Context, prfx, userSettings));
-
-        await this.Context.SendResponse(this.Interactivity, response);
-        this.Context.LogCommandUsed(response.CommandResponse);
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
     }
 
     [Command("addalbum")]
@@ -514,7 +535,7 @@ public class AdminCommands : BaseCommandModule
             }
 
             var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
-            var albumSearch = await this._albumService.SearchAlbum(new ResponseModel(), this.Context.User, albumValues, userSettings.UserNameLastFM);
+            var albumSearch = await this._albumService.SearchAlbum(new ResponseModel(), this.Context.User, albumValues, userSettings.UserNameLastFM, referencedMessage: this.Context.Message.ReferencedMessage);
             if (albumSearch.Album == null)
             {
                 await this.Context.SendResponse(this.Interactivity, albumSearch.Response);
@@ -753,17 +774,6 @@ public class AdminCommands : BaseCommandModule
         catch (Exception e)
         {
             await this.Context.HandleCommandException(e);
-        }
-    }
-
-    [Command("migratecensored")]
-    public async Task MigrateCensoredAsync()
-    {
-        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Owner))
-        {
-            await this._censorService.Migrate();
-            await ReplyAsync("Done! Check logs 🤠");
-            this.Context.LogCommandUsed();
         }
     }
 
@@ -1119,24 +1129,7 @@ public class AdminCommands : BaseCommandModule
 
             var supporter = await this._supporterService.AddOpenCollectiveSupporter(userSettings.DiscordUserId, openCollectiveSupporter);
 
-            var addedRole = false;
-            if (this.Context.Guild.Id == this._botSettings.Bot.BaseServerId)
-            {
-                try
-                {
-                    var guildUser = await this.Context.Guild.GetUserAsync(discordUserId);
-                    if (guildUser != null)
-                    {
-                        var role = this.Context.Guild.Roles.FirstOrDefault(x => x.Name == "Supporter");
-                        await guildUser.AddRoleAsync(role);
-                        addedRole = true;
-                    }
-                }
-                catch (Exception e)
-                {
-                    Log.Error("Adding supporter role failed for {id}", discordUserId, e);
-                }
-            }
+            await this._supporterService.ModifyGuildRole(userSettings.DiscordUserId);
 
             this._embed.WithTitle("Added new supporter");
             var description = new StringBuilder();
@@ -1145,7 +1138,6 @@ public class AdminCommands : BaseCommandModule
                                    $"Subscription type: `{Enum.GetName(supporter.SubscriptionType.GetValueOrDefault())}`");
 
             description.AppendLine();
-            description.AppendLine(addedRole ? "✅ Supporter role added" : "❌ Unable to add supporter role");
             description.AppendLine("✅ Full update started");
 
             this._embed.WithFooter("Name changes go through OpenCollective and apply within 24h");
@@ -1700,8 +1692,9 @@ public class AdminCommands : BaseCommandModule
         {
             try
             {
-                await this._timer.PickNewFeatureds();
                 await ReplyAsync("Started pick new featured job");
+                await this._timer.PickNewFeatureds();
+                await ReplyAsync("Finished pick new featured job");
             }
             catch (Exception e)
             {
@@ -1710,7 +1703,30 @@ public class AdminCommands : BaseCommandModule
         }
         else
         {
-            await ReplyAsync("Error: Insufficient rights. Only FMBot owners can stop timer.");
+            await ReplyAsync(Constants.FmbotStaffOnly);
+            this.Context.LogCommandUsed(CommandResponse.NoPermission);
+        }
+    }
+
+    [Command("checknewsupporters")]
+    [Summary("Runs the job that checks for new OpenCollective supporters.")]
+    public async Task CheckNewSupporters()
+    {
+        if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+        {
+            try
+            {
+                await this._timer.CheckForNewOcSupporters();
+                await ReplyAsync("Checked for new oc supporters");
+            }
+            catch (Exception e)
+            {
+                await this.Context.HandleCommandException(e);
+            }
+        }
+        else
+        {
+            await ReplyAsync(Constants.FmbotStaffOnly);
             this.Context.LogCommandUsed(CommandResponse.NoPermission);
         }
     }
@@ -1772,11 +1788,10 @@ public class AdminCommands : BaseCommandModule
             try
             {
                 _ = this.Context.Channel.TriggerTypingAsync();
-                var supporters = await this._supporterService.GetAllVisibleSupporters();
+                var activeSupporters = await this._supporterService.GetAllVisibleSupporters();
+                var guildMembers = await this.Context.Guild.GetUsersAsync();
 
-                var members = await this.Context.Guild.GetUsersAsync();
-
-                var discordUserIds = supporters
+                var discordUserIds = activeSupporters
                     .Where(w => w.DiscordUserId.HasValue)
                     .Select(s => s.DiscordUserId.Value)
                     .ToHashSet();
@@ -1786,7 +1801,7 @@ public class AdminCommands : BaseCommandModule
 
                 var reply = new StringBuilder();
 
-                foreach (var member in members.Where(w => discordUserIds.Contains(w.Id)))
+                foreach (var member in guildMembers.Where(w => discordUserIds.Contains(w.Id)))
                 {
                     if (member.RoleIds.All(a => a != role.Id))
                     {
@@ -1800,6 +1815,24 @@ public class AdminCommands : BaseCommandModule
                 reply.AppendLine();
                 reply.AppendLine($"Updated all Discord supporters.");
                 reply.AppendLine($"{count} users didn't have the supporter role when they should have had it.");
+
+                var allSupporters = await this._supporterService.GetAllSupporters();
+                var expiredOnly = allSupporters
+                    .Where(w => w.DiscordUserId.HasValue)
+                    .GroupBy(g => g.DiscordUserId)
+                    .Where(w => w.All(a => a.Expired == true))
+                    .Select(s => s.Key).ToHashSet();
+
+                reply.AppendLine();
+                reply.AppendLine("Check if these should have it (nvm, just ignore this):");
+                foreach (var member in guildMembers.Where(w => expiredOnly.Contains(w.Id)))
+                {
+                    if (member.RoleIds.Any(a => a == role.Id))
+                    {
+                        reply.AppendLine($"{member.Id} - <@{member.Id}> - {member.DisplayName}");
+                    }
+                }
+
 
                 await ReplyAsync(reply.ToString());
             }
@@ -2151,6 +2184,31 @@ public class AdminCommands : BaseCommandModule
         }
     }
 
+    [Command("supporterlink")]
+    [Summary("Runs a toplist update for someone else")]
+    public async Task GetSupporterTestLink([Remainder] string user = null)
+    {
+        try
+        {
+            if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+            {
+                var components = new ComponentBuilder().WithButton("Generate link", customId: InteractionConstants.SupporterLinks.GetPurchaseLink);
+
+                await ReplyAsync($"Use the button below to get your unique purchase link", allowedMentions: AllowedMentions.None, components: components.Build());
+                this.Context.LogCommandUsed();
+            }
+            else
+            {
+                await ReplyAsync("You are not authorized to use this command.");
+                this.Context.LogCommandUsed(CommandResponse.NoPermission);
+            }
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [Command("importdebug")]
     [Summary("Debug your import playcount")]
     [Options("Artist name")]
@@ -2203,8 +2261,8 @@ public class AdminCommands : BaseCommandModule
 
                 switch (dbUser.DataSource)
                 {
-                    case DataSource.FullSpotifyThenLastFm:
-                    case DataSource.SpotifyThenFullLastFm:
+                    case DataSource.FullImportThenLastFm:
+                    case DataSource.ImportThenFullLastFm:
                         description.AppendLine($"Imported: {name}");
                         break;
                     case DataSource.LastFm:
@@ -2340,6 +2398,145 @@ public class AdminCommands : BaseCommandModule
             await ReplyAsync(embed: this._embed.Build());
 
             this.Context.LogCommandUsed();
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [Command("movedata")]
+    [Summary("Move imports, streaks, featured logs and users that have them as friends from one user to another")]
+    public async Task MoveData(string oldUserId = null, string newUserId = null)
+    {
+        try
+        {
+            if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Admin))
+            {
+                if (oldUserId == null || newUserId == null)
+                {
+                    await ReplyAsync("Enter the old and new id. For example, `.moveimports 125740103539621888 356268235697553409`");
+                    this.Context.LogCommandUsed(CommandResponse.WrongInput);
+                    return;
+                }
+
+                var oldUser = await this._settingService.GetDifferentUser(oldUserId);
+                var newUser = await this._settingService.GetDifferentUser(newUserId);
+
+                if (oldUser == null || newUser == null)
+                {
+                    await ReplyAsync("One or both users could not be found. Are you sure they are registered in .fmbot?");
+                    this.Context.LogCommandUsed(CommandResponse.NotFound);
+                    return;
+                }
+
+                var embed = new EmbedBuilder();
+
+                var oldUserDescription = new StringBuilder();
+                oldUserDescription.AppendLine($"`{oldUser.DiscordUserId}` - <@{oldUser.DiscordUserId}>");
+                oldUserDescription.AppendLine($"Last.fm: `{oldUser.UserNameLastFM}`");
+                if (oldUser.LastUsed.HasValue)
+                {
+                    var specifiedDateTime = DateTime.SpecifyKind(oldUser.LastUsed.Value, DateTimeKind.Utc);
+                    var dateValue = ((DateTimeOffset)specifiedDateTime).ToUnixTimeSeconds();
+
+                    oldUserDescription.AppendLine($"Last used: <t:{dateValue}:R>.");
+                }
+
+                embed.AddField($"Old user - {oldUser.UserId} {oldUser.UserType.UserTypeToIcon()}", oldUserDescription.ToString());
+
+                var newUserDescription = new StringBuilder();
+                newUserDescription.AppendLine($"`{newUser.DiscordUserId}` - <@{newUser.DiscordUserId}>");
+                newUserDescription.AppendLine($"Last.fm: `{newUser.UserNameLastFM}`");
+                if (newUser.LastUsed.HasValue)
+                {
+                    var specifiedDateTime = DateTime.SpecifyKind(newUser.LastUsed.Value, DateTimeKind.Utc);
+                    var dateValue = ((DateTimeOffset)specifiedDateTime).ToUnixTimeSeconds();
+
+                    newUserDescription.AppendLine($"Last used: <t:{dateValue}:R>.");
+                }
+
+                embed.AddField($"New user - {newUser.UserId} {newUser.UserType.UserTypeToIcon()}", newUserDescription.ToString());
+
+                if (!string.Equals(oldUser.UserNameLastFM, newUser.UserNameLastFM, StringComparison.OrdinalIgnoreCase))
+                {
+                    embed.AddField("⚠️ Warning ⚠️", "Last.fm usernames are different, are you sure?");
+                }
+
+                embed.WithDescription(
+                    "This will move over all imported plays, saved streaks, featured logs and users that added them as friend from one user to another.\n\n" +
+                    "Note about imports:\n" +
+                    "- The new user should have no imports! Otherwise they might be duplicated" +
+                    "- After moving they can enable the imports with `/import manage`");
+
+                var components = new ComponentBuilder().WithButton("Move data", customId: $"move-user-data-{oldUser.UserId}-{newUser.UserId}", ButtonStyle.Danger);
+
+                await ReplyAsync(null, embed: embed.Build(), allowedMentions: AllowedMentions.None, components: components.Build());
+                this.Context.LogCommandUsed();
+            }
+            else
+            {
+                await ReplyAsync("You are not authorized to use this command.");
+                this.Context.LogCommandUsed(CommandResponse.NoPermission);
+            }
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [Command("deleteuser")]
+    [Summary("Remove a user")]
+    [Alias("removeuser")]
+    public async Task DeleteUser(string userToDelete = null)
+    {
+        try
+        {
+            if (await this._adminService.HasCommandAccessAsync(this.Context.User, UserType.Owner) && this.Context.Guild.Id == 821660544581763093)
+            {
+                if (userToDelete == null)
+                {
+                    await ReplyAsync("Enter the user to delete. For example, `.deleteuser 125740103539621888`");
+                    this.Context.LogCommandUsed(CommandResponse.WrongInput);
+                    return;
+                }
+
+                var user = await this._settingService.GetDifferentUser(userToDelete);
+
+                if (user == null)
+                {
+                    await ReplyAsync("User could not be found. Are you sure they are registered in .fmbot?");
+                    this.Context.LogCommandUsed(CommandResponse.NotFound);
+                    return;
+                }
+
+                var embed = new EmbedBuilder();
+
+                var userDescription = new StringBuilder();
+                userDescription.AppendLine($"`{user.DiscordUserId}` - <@{user.DiscordUserId}>");
+                userDescription.AppendLine($"Last.fm: `{user.UserNameLastFM}`");
+                if (user.LastUsed.HasValue)
+                {
+                    var specifiedDateTime = DateTime.SpecifyKind(user.LastUsed.Value, DateTimeKind.Utc);
+                    var dateValue = ((DateTimeOffset)specifiedDateTime).ToUnixTimeSeconds();
+
+                    userDescription.AppendLine($"Last used: <t:{dateValue}:R>.");
+                }
+
+                embed.AddField($"User to delete - {user.UserId} {user.UserType.UserTypeToIcon()}", userDescription.ToString());
+                embed.WithFooter("⚠️ You cant revert this ⚠️ watch out whee oooo");
+
+                var components = new ComponentBuilder().WithButton("Delete user", customId: $"admin-delete-user-{user.UserId}", ButtonStyle.Danger);
+
+                await ReplyAsync(null, embed: embed.Build(), allowedMentions: AllowedMentions.None, components: components.Build());
+                this.Context.LogCommandUsed();
+            }
+            else
+            {
+                await ReplyAsync("You are not authorized to use this command, or you're in the wrong server.");
+                this.Context.LogCommandUsed(CommandResponse.NoPermission);
+            }
         }
         catch (Exception e)
         {

@@ -33,7 +33,7 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         return new Response<RecentTrackList>
         {
             Success = true,
-            PlaySource = DeterminePlaySource(plays),
+            PlaySources = DeterminePlaySources(plays),
             Content = new RecentTrackList
             {
                 RecentTracks = plays.Select(s => new RecentTrack
@@ -91,7 +91,7 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
                 }
                 : null,
             Success = milestone != null,
-            PlaySource = DeterminePlaySource(plays)
+            PlaySources = DeterminePlaySources(plays)
         };
     }
 
@@ -121,7 +121,11 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
             TrackName = g.TrackName.ToLower()
         }).Count();
 
-        dataSourceUser.Registered = plays.MinBy(o => o.TimePlayed).TimePlayed;
+        if (plays.Any())
+        {
+            dataSourceUser.Registered = plays.MinBy(o => o.TimePlayed).TimePlayed;
+            dataSourceUser.RegisteredUnix = ((DateTimeOffset)dataSourceUser.Registered).ToUnixTimeSeconds();
+        }
 
         return dataSourceUser;
     }
@@ -206,7 +210,7 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         return new Response<TopAlbumList>
         {
             Success = true,
-            PlaySource = DeterminePlaySource(plays),
+            PlaySources = DeterminePlaySources(plays),
             Content = new TopAlbumList
             {
                 TotalAmount = topAlbums.Count,
@@ -288,7 +292,7 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         return new Response<TopArtistList>
         {
             Success = true,
-            PlaySource = DeterminePlaySource(plays),
+            PlaySources = DeterminePlaySources(plays),
             Content = new TopArtistList
             {
                 TotalAmount = topArtists.Count,
@@ -371,7 +375,7 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         return new Response<TopTrackList>
         {
             Success = true,
-            PlaySource = DeterminePlaySource(plays),
+            PlaySources = DeterminePlaySources(plays),
             Content = new TopTrackList
             {
                 TotalAmount = topTracks.Count,
@@ -398,18 +402,28 @@ public class PlayDataSourceRepository : IPlayDataSourceRepository
         };
     }
 
-    private static PlaySource DeterminePlaySource(ICollection<UserPlay> plays)
+    private static List<PlaySource> DeterminePlaySources(ICollection<UserPlay> plays)
     {
         if (plays == null)
         {
-            return PlaySource.LastFm;
+            return [PlaySource.LastFm];
         }
+
+        var playSources = new List<PlaySource>();
 
         if (plays.Any(a => a.PlaySource == PlaySource.SpotifyImport))
         {
-            return PlaySource.SpotifyImport;
+            playSources.Add(PlaySource.SpotifyImport);
+        }
+        if (plays.Any(a => a.PlaySource == PlaySource.AppleMusicImport))
+        {
+            playSources.Add(PlaySource.AppleMusicImport);
+        }
+        if (plays.Any(a => a.PlaySource == PlaySource.LastFm))
+        {
+            playSources.Add(PlaySource.LastFm);
         }
 
-        return PlaySource.LastFm;
+        return playSources;
     }
 }

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Discord;
 using Fergun.Interactive;
 using FMBot.Bot.Extensions;
+using FMBot.Bot.Factories;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
@@ -23,7 +24,6 @@ using FMBot.Domain.Models;
 using FMBot.Images.Generators;
 using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
-using Genius.Models.Song;
 using SkiaSharp;
 using StringExtensions = FMBot.Bot.Extensions.StringExtensions;
 
@@ -34,7 +34,6 @@ public class ArtistBuilders
     private readonly ArtistsService _artistsService;
     private readonly IDataSourceFactory _dataSourceFactory;
     private readonly GuildService _guildService;
-    private readonly SpotifyService _spotifyService;
     private readonly UserService _userService;
     private readonly WhoKnowsArtistService _whoKnowsArtistService;
     private readonly WhoKnowsPlayService _whoKnowsPlayService;
@@ -50,11 +49,12 @@ public class ArtistBuilders
     private readonly GenreService _genreService;
     private readonly DiscogsService _discogsService;
     private readonly CensorService _censorService;
+    private readonly FeaturedService _featuredService;
+    private readonly MusicDataFactory _musicDataFactory;
 
     public ArtistBuilders(ArtistsService artistsService,
         IDataSourceFactory dataSourceFactory,
         GuildService guildService,
-        SpotifyService spotifyService,
         UserService userService,
         WhoKnowsArtistService whoKnowsArtistService,
         PlayService playService,
@@ -69,12 +69,13 @@ public class ArtistBuilders
         CountryService countryService,
         GenreService genreService,
         DiscogsService discogsService,
-        CensorService censorService)
+        CensorService censorService,
+        FeaturedService featuredService,
+        MusicDataFactory musicDataFactory)
     {
         this._artistsService = artistsService;
         this._dataSourceFactory = dataSourceFactory;
         this._guildService = guildService;
-        this._spotifyService = spotifyService;
         this._userService = userService;
         this._whoKnowsArtistService = whoKnowsArtistService;
         this._playService = playService;
@@ -90,6 +91,8 @@ public class ArtistBuilders
         this._genreService = genreService;
         this._discogsService = discogsService;
         this._censorService = censorService;
+        this._featuredService = featuredService;
+        this._musicDataFactory = musicDataFactory;
     }
 
     public async Task<ResponseModel> ArtistInfoAsync(ContextModel context,
@@ -104,15 +107,23 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, searchValue,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm,
-            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var fullArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, searchValue, redirectsEnabled, true);
+        var fullArtist = await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, searchValue, redirectsEnabled);
 
         var footer = new StringBuilder();
+
+        var featuredHistory = await this._featuredService.GetArtistFeaturedHistory(artistSearch.Artist.ArtistName);
+        if (featuredHistory.Any())
+        {
+            footer.AppendLine($"Featured {featuredHistory.Count} {StringExtensions.GetTimesString(featuredHistory.Count)}");
+        }
+
         if (fullArtist.SpotifyImageUrl != null)
         {
             response.Embed.WithThumbnailUrl(fullArtist.SpotifyImageUrl);
@@ -121,7 +132,7 @@ public class ArtistBuilders
 
         if (context.ContextUser.TotalPlaycount.HasValue && artistSearch.Artist.UserPlaycount is >= 10)
         {
-            footer.AppendLine($"{(decimal)artistSearch.Artist.UserPlaycount.Value / context.ContextUser.TotalPlaycount.Value:P} of all your scrobbles are on this artist");
+            footer.AppendLine($"{(decimal)artistSearch.Artist.UserPlaycount.Value / context.ContextUser.TotalPlaycount.Value:P} of all your plays are on this artist");
         }
 
         var userTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
@@ -146,11 +157,10 @@ public class ArtistBuilders
         else
         {
             var randomHintNumber = new Random().Next(0, Constants.SupporterPromoChance);
-            if (randomHintNumber == 1 && this._supporterService.ShowPromotionalMessage(context.ContextUser.UserType, context.DiscordGuild?.Id))
+            if (randomHintNumber == 1 && this._supporterService.ShowSupporterPromotionalMessage(context.ContextUser.UserType, context.DiscordGuild?.Id))
             {
-                this._supporterService.SetGuildPromoCache(context.DiscordGuild?.Id);
-                response.Embed.WithDescription($"*Supporters can see the date they discovered an artist. " +
-                                               $"[{Constants.GetSupporterOverviewButton}]({Constants.GetSupporterDiscordLink})*");
+                this._supporterService.SetGuildSupporterPromoCache(context.DiscordGuild?.Id);
+                response.Embed.WithDescription($"*[Supporters]({Constants.GetSupporterDiscordLink}) can see artist discovery dates.*");
             }
         }
 
@@ -332,6 +342,12 @@ public class ArtistBuilders
         {
             response.Components.WithButton(style: ButtonStyle.Link,
                 emote: Emote.Parse(DiscordConstants.Spotify), url: $"https://open.spotify.com/artist/{fullArtist.SpotifyId}");
+
+            if (fullArtist.AppleMusicUrl != null)
+            {
+                response.Components.WithButton(style: ButtonStyle.Link,
+                    emote: Emote.Parse(DiscordConstants.AppleMusic), url: fullArtist.AppleMusicUrl);
+            }
         }
 
         if (fullArtist.ArtistLinks != null && fullArtist.ArtistLinks.Any())
@@ -367,7 +383,7 @@ public class ArtistBuilders
                     emote: Emote.Parse(DiscordConstants.Bandcamp), url: bandcamp.Url);
             }
         }
-        
+
         response.Embed.WithFooter(footer.ToString());
         return response;
     }
@@ -384,13 +400,14 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, searchValue,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, userId: context.ContextUser.UserId,
-            otherUserUsername: userSettings.UserNameLastFm, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            otherUserUsername: userSettings.UserNameLastFm, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var fullArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, searchValue, redirectsEnabled);
+        var fullArtist = await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, searchValue, redirectsEnabled);
 
         var footer = new StringBuilder();
 
@@ -420,6 +437,7 @@ public class ArtistBuilders
         }
 
         var description = new StringBuilder();
+        description.Append("-# *");
         if (user.UserType != UserType.User && artistSearch.Artist.UserPlaycount > 0)
         {
             var firstPlay = await this._playService.GetArtistFirstPlayDate(user.UserId, artistSearch.Artist.ArtistName);
@@ -427,37 +445,37 @@ public class ArtistBuilders
             {
                 var firstListenValue = ((DateTimeOffset)firstPlay).ToUnixTimeSeconds();
 
-                description.AppendLine($"Discovered on: <t:{firstListenValue}:D>");
+                description.Append($"Discovered on: <t:{firstListenValue}:D> — ");
             }
         }
         else
         {
             var randomHintNumber = new Random().Next(0, Constants.SupporterPromoChance);
-            if (randomHintNumber == 1 && this._supporterService.ShowPromotionalMessage(context.ContextUser.UserType, context.DiscordGuild?.Id))
+            if (randomHintNumber == 1 && this._supporterService.ShowSupporterPromotionalMessage(context.ContextUser.UserType, context.DiscordGuild?.Id))
             {
-                this._supporterService.SetGuildPromoCache(context.DiscordGuild?.Id);
-                description.AppendLine($"*Supporters can see the date they discovered an artist. " +
-                                       $"[{Constants.GetSupporterOverviewButton}]({Constants.GetSupporterDiscordLink})*");
+                this._supporterService.SetGuildSupporterPromoCache(context.DiscordGuild?.Id);
+                description.Append($"*[Supporters]({Constants.GetSupporterDiscordLink}) can see artist discovery dates.*");
             }
         }
 
         if (artistSearch.Artist.UserPlaycount > 0)
         {
             description.Append(
-                $"`{artistSearch.Artist.UserPlaycount}` {StringExtensions.GetPlaysString(artistSearch.Artist.UserPlaycount)} on this artist");
+                $"{artistSearch.Artist.UserPlaycount} {StringExtensions.GetPlaysString(artistSearch.Artist.UserPlaycount)} on this artist");
 
             var playsLastWeek =
                 await this._playService.GetArtistPlaycountForTimePeriodAsync(userSettings.UserId, artistSearch.Artist.ArtistName);
             if (playsLastWeek != 0)
             {
-                description.Append(
-                    $" - `{playsLastWeek}` last week");
+                description.Append($" — {playsLastWeek} {StringExtensions.GetPlaysString(playsLastWeek)} last week");
             }
         }
         else
         {
-            description.Append("No plays on this artist yet.");
+            description.Append("No plays on this artist yet");
         }
+
+        description.Append("*");
 
         response.Embed.WithDescription(description.ToString());
 
@@ -498,7 +516,7 @@ public class ArtistBuilders
                 var counter = 1;
                 foreach (var track in topTracks.Take(8))
                 {
-                    topTracksDescription.AppendLine($"{counter}. **{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.Name, 40))}** - " +
+                    topTracksDescription.AppendLine($"`{counter}` **{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.Name, 40))}** - " +
                                                     $"*{track.Playcount}x*");
                     counter++;
                 }
@@ -515,7 +533,7 @@ public class ArtistBuilders
                 var counter = 1;
                 foreach (var album in topAlbums.Take(8))
                 {
-                    topAlbumsDescription.AppendLine($"{counter}. **{StringExtensions.Sanitize(StringExtensions.TruncateLongString(album.Name, 40))}** - " +
+                    topAlbumsDescription.AppendLine($"`{counter}` **{StringExtensions.Sanitize(StringExtensions.TruncateLongString(album.Name, 40))}** - " +
                                                     $"*{album.Playcount}x*");
                     counter++;
                 }
@@ -556,14 +574,15 @@ public class ArtistBuilders
         };
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, searchValue, context.ContextUser.UserNameLastFM,
-            context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm, true, userSettings.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm, true, userSettings.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
         var dbArtist =
-            await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, redirectsEnabled: redirectsEnabled);
+            await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, redirectsEnabled: redirectsEnabled);
 
         if (artistSearch.Artist.UserPlaycount.HasValue && !userSettings.DifferentUser)
         {
@@ -583,6 +602,16 @@ public class ArtistBuilders
             default:
                 topTracks = await this._artistsService.GetTopTracksForArtist(userSettings.UserId, artistSearch.Artist.ArtistName);
                 break;
+        }
+
+        if (topTracks.Count == 0 &&
+            timeSettings.TimePeriod == TimePeriod.AllTime &&
+            artistSearch.Artist.UserPlaycount >= 15 &&
+            !userSettings.DifferentUser)
+        {
+            var user = await this._userService.GetUserForIdAsync(userSettings.UserId);
+            await this._indexService.ModularUpdate(user, UpdateType.Tracks);
+            topTracks = await this._artistsService.GetTopTracksForArtist(userSettings.UserId, artistSearch.Artist.ArtistName);
         }
 
         var pages = new List<PageBuilder>();
@@ -679,14 +708,15 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, searchValue,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm,
-            true, userSettings.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            true, userSettings.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
         var dbArtist =
-            await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, redirectsEnabled: redirectsEnabled);
+            await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, redirectsEnabled: redirectsEnabled);
 
         if (artistSearch.Artist.UserPlaycount.HasValue && !userSettings.DifferentUser)
         {
@@ -696,6 +726,15 @@ public class ArtistBuilders
 
         var topAlbums = await this._artistsService.GetTopAlbumsForArtist(userSettings.UserId, artistSearch.Artist.ArtistName);
         var userTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
+
+        if (topAlbums.Count == 0 &&
+            artistSearch.Artist.UserPlaycount >= 15 &&
+            !userSettings.DifferentUser)
+        {
+            var user = await this._userService.GetUserForIdAsync(userSettings.UserId);
+            await this._indexService.ModularUpdate(user, UpdateType.Albums);
+            topAlbums = await this._artistsService.GetTopAlbumsForArtist(userSettings.UserId, artistSearch.Artist.ArtistName);
+        }
 
         if (topAlbums.Count == 0)
         {
@@ -981,7 +1020,7 @@ public class ArtistBuilders
 
             var footer = new StringBuilder();
 
-            ImportService.AddImportDescription(footer, artists.PlaySource);
+            ImportService.AddImportDescription(footer, artists.PlaySources);
 
             footer.Append($"Page {pageCounter}/{artistPages.Count}");
 
@@ -1170,6 +1209,13 @@ public class ArtistBuilders
             pageCounter++;
         }
 
+        if (artistPages.Count == 0)
+        {
+            pages.Add(new PageBuilder()
+                .WithDescription($"No discovered artists in {timeSettings.Description}.")
+                .WithAuthor(response.EmbedAuthor));
+        }
+
         response.StaticPaginator = StringService.BuildStaticPaginator(pages);
         response.ResponseType = ResponseType.Paginator;
         return response;
@@ -1187,7 +1233,8 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistName,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm,
-            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
@@ -1195,7 +1242,7 @@ public class ArtistBuilders
 
         var reply =
             $"**{StringExtensions.Sanitize(userSettings.DisplayName)}{userSettings.UserType.UserTypeToIcon()}** has " +
-            $"`{artistSearch.Artist.UserPlaycount}` {StringExtensions.GetPlaysString(artistSearch.Artist.UserPlaycount)} for " +
+            $"**{artistSearch.Artist.UserPlaycount}** {StringExtensions.GetPlaysString(artistSearch.Artist.UserPlaycount)} for " +
             $"**{StringExtensions.Sanitize(artistSearch.Artist.ArtistName)}**";
 
         if (!userSettings.DifferentUser && context.ContextUser.LastUpdated != null)
@@ -1204,7 +1251,7 @@ public class ArtistBuilders
                 await this._playService.GetArtistPlaycountForTimePeriodAsync(userSettings.UserId, artistSearch.Artist.ArtistName);
             if (playsLastWeek != 0)
             {
-                reply += $" (`{playsLastWeek}` last week)";
+                reply += $"\n-# *{playsLastWeek} {StringExtensions.GetPlaysString(playsLastWeek)} last week*";
             }
         }
 
@@ -1237,7 +1284,8 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistName,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, userSettings.UserNameLastFm,
-            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
@@ -1271,8 +1319,12 @@ public class ArtistBuilders
         var playsLeft = goalAmount - artistSearch.Artist.UserPlaycount.GetValueOrDefault(0);
 
         var avgPerDay = artistPlayCount / totalDays;
+        var daysToAdd = playsLeft / avgPerDay;
 
-        var goalDate = DateTime.UtcNow.AddDays(playsLeft / avgPerDay);
+        var limitDate = new DateTime(9999, 12, 31);
+
+        var timeLeft = limitDate - DateTime.Today;
+        var daysUntilLimit = timeLeft.Days;
 
         var reply = new StringBuilder();
 
@@ -1287,10 +1339,21 @@ public class ArtistBuilders
             reply.Append($"<@{context.DiscordUser.Id}> My estimate is that you");
         }
 
-        reply.AppendLine($" will reach **{goalAmount}** plays on **{StringExtensions.Sanitize(artistSearch.Artist.ArtistName)}** on **<t:{goalDate.ToUnixEpochDate()}:D>**.");
+        string goalDateString;
+        if (daysUntilLimit <= daysToAdd)
+        {
+            goalDateString = $"on a date beyond the year 9999! 🚀";
+        }
+        else
+        {
+            var goalDate = DateTime.UtcNow.AddDays(daysToAdd);
+            goalDateString = $"on **<t:{goalDate.ToUnixEpochDate()}:D>**.";
+        }
+
+        reply.AppendLine($" will reach **{goalAmount}** plays on **{StringExtensions.Sanitize(artistSearch.Artist.ArtistName)}** {goalDateString}");
 
         reply.AppendLine(
-            $"This is based on {determiner} avg of {Math.Round(avgPerDay, 1)} per day in the last {Math.Round(totalDays, 0)} days ({artistPlayCount} total - {artistSearch.Artist.UserPlaycount} alltime)");
+            $"This is based on {determiner} avg of {Math.Round(avgPerDay, 2)} per day in the last {Math.Round(totalDays, 0)} days ({artistPlayCount} total - {artistSearch.Artist.UserPlaycount} alltime)");
 
         response.Text = reply.ToString();
         return response;
@@ -1311,13 +1374,14 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistValues,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, useCachedArtists: true,
-            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, redirectsEnabled);
+        var cachedArtist = await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, redirectsEnabled);
 
         var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel, cachedArtist.Name);
         var imgUrl = cachedArtist.SpotifyImageUrl;
@@ -1400,14 +1464,16 @@ public class ArtistBuilders
             footer.AppendLine($"{GenreService.GenresToString(cachedArtist.ArtistGenres.ToList())}");
         }
 
-        var userTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
-        footer.AppendLine($"WhoKnows artist requested by {userTitle}");
-
         var rnd = new Random();
         var lastIndex = await this._guildService.GetGuildIndexTimestampAsync(context.DiscordGuild);
         if (rnd.Next(0, 10) == 1 && lastIndex < DateTime.UtcNow.AddDays(-180))
         {
             footer.AppendLine($"Missing members? Update with {context.Prefix}refreshmembers");
+        }
+
+        if (filterStats.FullDescription != null)
+        {
+            footer.AppendLine(filterStats.FullDescription);
         }
 
         if (filteredUsersWithArtist.Any() && filteredUsersWithArtist.Count > 1)
@@ -1416,14 +1482,10 @@ public class ArtistBuilders
             var serverPlaycount = filteredUsersWithArtist.Sum(a => a.Playcount);
             var avgServerPlaycount = filteredUsersWithArtist.Average(a => a.Playcount);
 
+            footer.Append("Artist - ");
             footer.Append($"{serverListeners} {StringExtensions.GetListenersString(serverListeners)} - ");
-            footer.Append($"{serverPlaycount} total {StringExtensions.GetPlaysString(serverPlaycount)} - ");
-            footer.AppendLine($"{(int)avgServerPlaycount} avg {StringExtensions.GetPlaysString((int)avgServerPlaycount)}");
-        }
-
-        if (filterStats.FullDescription != null)
-        {
-            footer.AppendLine(filterStats.FullDescription);
+            footer.Append($"{serverPlaycount} {StringExtensions.GetPlaysString(serverPlaycount)} - ");
+            footer.AppendLine($"{(int)avgServerPlaycount} avg");
         }
 
         var guildAlsoPlaying = this._whoKnowsPlayService.GuildAlsoPlayingArtist(context.ContextUser.UserId,
@@ -1499,13 +1561,14 @@ public class ArtistBuilders
 
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser,
             settings.NewSearchValue, context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm,
-            useCachedArtists: true, userId: context.ContextUser.UserId, redirectsEnabled: settings.RedirectsEnabled, interactionId: context.InteractionId);
+            useCachedArtists: true, userId: context.ContextUser.UserId, redirectsEnabled: settings.RedirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
-        var cachedArtist = await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, settings.RedirectsEnabled);
+        var cachedArtist = await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, settings.RedirectsEnabled);
 
         var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel, cachedArtist.Name);
         var imgUrl = cachedArtist.SpotifyImageUrl;
@@ -1574,9 +1637,6 @@ public class ArtistBuilders
             footer.AppendLine($"{GenreService.GenresToString(cachedArtist.ArtistGenres.ToList())}");
         }
 
-        var userTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
-        footer.AppendLine($"Global WhoKnows artist requested by {userTitle}");
-
         footer = WhoKnowsService.GetGlobalWhoKnowsFooter(footer, settings, context);
 
         if (filteredUsersWithArtist.Any() && filteredUsersWithArtist.Count > 1)
@@ -1585,9 +1645,10 @@ public class ArtistBuilders
             var globalPlaycount = filteredUsersWithArtist.Sum(a => a.Playcount);
             var avgPlaycount = filteredUsersWithArtist.Average(a => a.Playcount);
 
+            footer.Append($"Global artist - ");
             footer.Append($"{globalListeners} {StringExtensions.GetListenersString(globalListeners)} - ");
-            footer.Append($"{globalPlaycount} total {StringExtensions.GetPlaysString(globalPlaycount)} - ");
-            footer.AppendLine($"{(int)avgPlaycount} avg {StringExtensions.GetPlaysString((int)avgPlaycount)}");
+            footer.Append($"{globalPlaycount} {StringExtensions.GetPlaysString(globalPlaycount)} - ");
+            footer.AppendLine($"{(int)avgPlaycount} avg");
         }
 
         //var guildAlsoPlaying = this._whoKnowsPlayService.GuildAlsoPlayingArtist(context.ContextUser.UserId,
@@ -1634,17 +1695,17 @@ public class ArtistBuilders
             return response;
         }
 
-
         var artistSearch = await this._artistsService.SearchArtist(response, context.DiscordUser, artistValues,
             context.ContextUser.UserNameLastFM, context.ContextUser.SessionKeyLastFm, useCachedArtists: true,
-            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId);
+            userId: context.ContextUser.UserId, redirectsEnabled: redirectsEnabled, interactionId: context.InteractionId,
+            referencedMessage: context.ReferencedMessage);
         if (artistSearch.Artist == null)
         {
             return artistSearch.Response;
         }
 
         var cachedArtist =
-            await this._spotifyService.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, redirectsEnabled);
+            await this._musicDataFactory.GetOrStoreArtistAsync(artistSearch.Artist, artistSearch.Artist.ArtistName, redirectsEnabled);
 
         var safeForChannel = await this._censorService.IsSafeForChannel(context.DiscordGuild, context.DiscordChannel, cachedArtist.Name);
         var imgUrl = cachedArtist.SpotifyImageUrl;
@@ -1690,20 +1751,18 @@ public class ArtistBuilders
 
         response.Embed.WithDescription(serverUsers);
 
-        var footer = "";
+        var footer = new StringBuilder();
 
         if (cachedArtist.ArtistGenres != null && cachedArtist.ArtistGenres.Any())
         {
-            footer += $"\n{GenreService.GenresToString(cachedArtist.ArtistGenres.ToList())}";
+            footer.AppendLine($"{GenreService.GenresToString(cachedArtist.ArtistGenres.ToList())}");
         }
 
         var amountOfHiddenFriends = context.ContextUser.Friends.Count(c => !c.FriendUserId.HasValue);
         if (amountOfHiddenFriends > 0)
         {
-            footer += $"\n{amountOfHiddenFriends} non-fmbot {StringExtensions.GetFriendsString(amountOfHiddenFriends)} not visible";
+            footer.AppendLine($"{amountOfHiddenFriends} non-fmbot {StringExtensions.GetFriendsString(amountOfHiddenFriends)} not visible");
         }
-
-        footer += $"\nFriends WhoKnow artist requested by {userTitle}";
 
         if (usersWithArtist.Any() && usersWithArtist.Count > 1)
         {
@@ -1711,10 +1770,12 @@ public class ArtistBuilders
             var globalPlaycount = usersWithArtist.Sum(a => a.Playcount);
             var avgPlaycount = usersWithArtist.Average(a => a.Playcount);
 
-            footer += $"\n{globalListeners} {StringExtensions.GetListenersString(globalListeners)} - ";
-            footer += $"{globalPlaycount} total {StringExtensions.GetPlaysString(globalPlaycount)} - ";
-            footer += $"{(int)avgPlaycount} avg {StringExtensions.GetPlaysString((int)avgPlaycount)}";
+            footer.Append($"{globalListeners} {StringExtensions.GetListenersString(globalListeners)} - ");
+            footer.Append($"{globalPlaycount} {StringExtensions.GetPlaysString(globalPlaycount)} - ");
+            footer.AppendLine($"{(int)avgPlaycount} avg");
         }
+
+        footer.AppendLine($"Friends WhoKnow artist for {userTitle}");
 
         response.Embed.WithTitle($"{cachedArtist.Name} with friends");
 
@@ -1723,7 +1784,7 @@ public class ArtistBuilders
             response.Embed.WithUrl(cachedArtist.LastFmUrl);
         }
 
-        response.EmbedFooter.WithText(footer);
+        response.EmbedFooter.WithText(footer.ToString());
         response.Embed.WithFooter(response.EmbedFooter);
 
         if (imgUrl != null && safeForChannel == CensorService.CensorResult.Safe)
@@ -1995,7 +2056,7 @@ public class ArtistBuilders
         if (self == null)
         {
             response.Embed.WithDescription(
-                "Sorry, you are not added to this server yet. Run `/refreshmembers` and try again.");
+                "Sorry, you are not added to this server yet or you are not in the results. Run `/refreshmembers`, wait a bit and try again.");
             response.ResponseType = ResponseType.Embed;
             response.CommandResponse = CommandResponse.NotFound;
             return response;

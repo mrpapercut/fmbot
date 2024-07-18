@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -14,6 +13,7 @@ using FMBot.Domain.Enums;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
+using Google.Protobuf.WellKnownTypes;
 using IF.Lastfm.Core.Api.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -32,7 +32,8 @@ public class SettingService
         TimePeriod defaultTimePeriod = TimePeriod.Weekly,
         DateTime? registeredLastFm = null,
         bool cachedOrAllTimeOnly = false,
-        bool dailyTimePeriods = true)
+        bool dailyTimePeriods = true,
+        string timeZone = null)
     {
         var settingsModel = new TimeSettingsModel();
         bool? customTimePeriod = null;
@@ -44,17 +45,23 @@ public class SettingService
         settingsModel.EndDateTime = DateTime.UtcNow;
         settingsModel.DefaultPicked = false;
 
+        var timeZoneInfo = timeZone != null ? TimeZoneInfo.FindSystemTimeZoneById(timeZone) : TimeZoneInfo.Utc;
+        var localTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc), timeZoneInfo);
+        var localMidnightInUtc = TimeZoneInfo.ConvertTimeToUtc(localTime.Date, timeZoneInfo);
+
         var year = GetYear(options);
         var month = GetMonth(options);
 
         if ((year != null || month != null) && !cachedOrAllTimeOnly)
         {
-            settingsModel.StartDateTime = new DateTime(
-                year.GetValueOrDefault(DateTime.Today.Year),
+            var startUnspecified = new DateTime(
+                year.GetValueOrDefault(DateTime.UtcNow.Year),
                 month.GetValueOrDefault(1),
                 1);
 
-            if (month.HasValue && month.Value > DateTime.UtcNow.Month && !year.HasValue)
+            settingsModel.StartDateTime = TimeZoneInfo.ConvertTimeToUtc(startUnspecified.Date, timeZoneInfo);
+
+            if (month.HasValue && month.Value > localTime.Month && !year.HasValue)
             {
                 settingsModel.StartDateTime = settingsModel.StartDateTime.Value.AddYears(-1);
                 year = settingsModel.StartDateTime.Value.Year;
@@ -71,25 +78,25 @@ public class SettingService
             if (!year.HasValue && month.HasValue)
             {
                 settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { month.Value.ToString(), DateTimeFormatInfo.CurrentInfo.GetMonthName(month.Value) });
-                settingsModel.Description = settingsModel.StartDateTime.Value.ToString("MMMM");
-                settingsModel.AltDescription = $"month {settingsModel.StartDateTime.Value.ToString("MMMM")}";
+                settingsModel.Description = startUnspecified.ToString("MMMM");
+                settingsModel.AltDescription = $"month {startUnspecified.ToString("MMMM")}";
                 settingsModel.EndDateTime = settingsModel.StartDateTime.Value.AddMonths(1).AddSeconds(-1);
-                settingsModel.BillboardTimeDescription = $"{settingsModel.StartDateTime.Value.AddMonths(-1):MMMM}";
+                settingsModel.BillboardTimeDescription = $"{startUnspecified.AddMonths(-1):MMMM}";
             }
             if (year.HasValue && month.HasValue)
             {
                 settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { year.Value.ToString(), month.Value.ToString(), DateTimeFormatInfo.CurrentInfo.GetMonthName(month.Value) });
 
-                settingsModel.Description = $"{settingsModel.StartDateTime.Value:MMMM} {year}";
-                settingsModel.AltDescription = $"month {settingsModel.StartDateTime.Value:MMMM} of {year}";
+                settingsModel.Description = $"{startUnspecified:MMMM} {year}";
+                settingsModel.AltDescription = $"month {startUnspecified:MMMM} of {year}";
                 settingsModel.EndDateTime = settingsModel.StartDateTime.Value.AddMonths(1).AddSeconds(-1);
             }
 
             settingsModel.PlayDays =
                 (int)(settingsModel.EndDateTime.Value - settingsModel.StartDateTime.Value).TotalDays;
 
-            var startDateString = settingsModel.StartDateTime.Value.ToString("yyyy-M-dd");
-            var endDateString = settingsModel.EndDateTime.Value.ToString("yyyy-M-dd");
+            var startDateString = startUnspecified.ToString("yyyy-M-dd");
+            var endDateString = settingsModel.EndDateTime.Value.AddHours(-12).ToString("yyyy-M-dd");
 
             settingsModel.BillboardStartDateTime =
                 settingsModel.StartDateTime.Value.AddDays(-settingsModel.PlayDays.Value);
@@ -106,7 +113,9 @@ public class SettingService
             return settingsModel;
         }
 
-        var oneDay = new[] { "1-day", "1day", "1d", "today", "day", "daily" };
+        var oneDay = new[] { "1-day", "1day", "1d", "24h", "24-h", "24hr", "24-hr", "24hours" };
+        var today = new[] { "today", "day", "daily" };
+        var yesterday = new[] { "yesterday", "yd" };
         var twoDays = new[] { "2-day", "2day", "2d" };
         var threeDays = new[] { "3-day", "3day", "3d" };
         var fourDays = new[] { "4-day", "4day", "4d" };
@@ -197,74 +206,99 @@ public class SettingService
         else if (Contains(options, sixDays) && dailyTimePeriods)
         {
             settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, sixDays);
-            var dateString = DateTime.Today.AddDays(-6).ToString("yyyy-M-dd");
+            var dateString = localTime.AddDays(-5).ToString("yyyy-M-dd");
             settingsModel.Description = "6-day";
             settingsModel.AltDescription = "last 6 days";
             settingsModel.UrlParameter = $"from={dateString}";
             settingsModel.UsePlays = true;
             settingsModel.UseCustomTimePeriod = true;
             settingsModel.PlayDays = 6;
-            settingsModel.StartDateTime = DateTime.Today.AddDays(-6);
+            settingsModel.StartDateTime = localMidnightInUtc.AddDays(-5);
         }
         else if (Contains(options, fiveDays) && dailyTimePeriods)
         {
             settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, fiveDays);
-            var dateString = DateTime.Today.AddDays(-5).ToString("yyyy-M-dd");
+            var dateString = localTime.AddDays(-4).ToString("yyyy-M-dd");
             settingsModel.Description = "5-day";
             settingsModel.AltDescription = "last 5 days";
             settingsModel.UrlParameter = $"from={dateString}";
             settingsModel.UsePlays = true;
             settingsModel.UseCustomTimePeriod = true;
             settingsModel.PlayDays = 5;
-            settingsModel.StartDateTime = DateTime.Today.AddDays(-5);
+            settingsModel.StartDateTime = localMidnightInUtc.AddDays(-4);
         }
         else if (Contains(options, fourDays) && dailyTimePeriods)
         {
             settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, fourDays);
-            var dateString = DateTime.Today.AddDays(-4).ToString("yyyy-M-dd");
+            var dateString = localTime.AddDays(-3).ToString("yyyy-M-dd");
             settingsModel.Description = "4-day";
             settingsModel.AltDescription = "last 4 days";
             settingsModel.UrlParameter = $"from={dateString}";
             settingsModel.UsePlays = true;
             settingsModel.UseCustomTimePeriod = true;
             settingsModel.PlayDays = 4;
-            settingsModel.StartDateTime = DateTime.Today.AddDays(-4);
+            settingsModel.StartDateTime = localMidnightInUtc.AddDays(-3);
         }
         else if (Contains(options, threeDays) && dailyTimePeriods)
         {
             settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, threeDays);
-            var dateString = DateTime.Today.AddDays(-3).ToString("yyyy-M-dd");
+            var dateString = localTime.AddDays(-2).ToString("yyyy-M-dd");
             settingsModel.Description = "3-day";
             settingsModel.AltDescription = "last 3 days";
             settingsModel.UrlParameter = $"from={dateString}";
             settingsModel.UsePlays = true;
             settingsModel.UseCustomTimePeriod = true;
             settingsModel.PlayDays = 3;
-            settingsModel.StartDateTime = DateTime.Today.AddDays(-3);
+            settingsModel.StartDateTime = localMidnightInUtc.AddDays(-2);
         }
         else if (Contains(options, twoDays) && dailyTimePeriods)
         {
             settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, twoDays);
-            var dateString = DateTime.Today.AddDays(-2).ToString("yyyy-M-dd");
+            var dateString = localTime.AddDays(-1).ToString("yyyy-M-dd");
             settingsModel.Description = "2-day";
             settingsModel.AltDescription = "last 2 days";
             settingsModel.UrlParameter = $"from={dateString}";
             settingsModel.UsePlays = true;
             settingsModel.UseCustomTimePeriod = true;
             settingsModel.PlayDays = 2;
-            settingsModel.StartDateTime = DateTime.Today.AddDays(-2);
+            settingsModel.StartDateTime = localMidnightInUtc.AddDays(-1);
         }
-        else if (Contains(options, oneDay) && dailyTimePeriods)
+        else if (Contains(options, yesterday) && dailyTimePeriods)
         {
             settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, oneDay);
-            var dateString = DateTime.Today.AddDays(-1).ToString("yyyy-M-dd");
-            settingsModel.Description = "1-day";
-            settingsModel.AltDescription = "last 24 hours";
+            var dateString = localTime.AddDays(-1).ToString("yyyy-M-dd");
+            settingsModel.Description = "yesterday";
+            settingsModel.AltDescription = "yesterday";
+            settingsModel.UrlParameter = $"from={dateString}&to={dateString}";
+            settingsModel.UsePlays = true;
+            settingsModel.UseCustomTimePeriod = true;
+            settingsModel.PlayDays = 2;
+            settingsModel.StartDateTime = localMidnightInUtc.AddDays(-1);
+            settingsModel.EndDateTime = localMidnightInUtc;
+        }
+        else if (Contains(options, today) && dailyTimePeriods)
+        {
+            settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, today);
+            var dateString = localTime.ToString("yyyy-M-dd");
+            settingsModel.Description = "day";
+            settingsModel.AltDescription = "day";
             settingsModel.UrlParameter = $"from={dateString}";
             settingsModel.UsePlays = true;
             settingsModel.UseCustomTimePeriod = true;
             settingsModel.PlayDays = 1;
-            settingsModel.StartDateTime = DateTime.Today.AddDays(-1);
+            settingsModel.StartDateTime = localMidnightInUtc;
+        }
+        else if (Contains(options, oneDay) && dailyTimePeriods)
+        {
+            settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, oneDay);
+            var dateString = localTime.ToString("yyyy-M-dd");
+            settingsModel.Description = "24h";
+            settingsModel.AltDescription = "24h";
+            settingsModel.UrlParameter = $"from={dateString}";
+            settingsModel.UsePlays = true;
+            settingsModel.UseCustomTimePeriod = true;
+            settingsModel.PlayDays = 1;
+            settingsModel.StartDateTime = DateTime.UtcNow.AddDays(-1);
         }
         else
         {
@@ -423,7 +457,6 @@ public class SettingService
             topListSettings.EmbedSize = EmbedSize.Small;
         }
 
-
         var discogs = new[] { "dc", "discogs" };
         if (Contains(extraOptions, discogs))
         {
@@ -435,6 +468,49 @@ public class SettingService
         {
             topListSettings.NewSearchValue = ContainsAndRemove(topListSettings.NewSearchValue, timeListened);
             topListSettings.Type = TopListType.TimeListened;
+        }
+
+        foreach (var option in extraOptions.Split(" "))
+        {
+            if (option.StartsWith("r:", StringComparison.OrdinalIgnoreCase) ||
+                option.StartsWith("released:", StringComparison.OrdinalIgnoreCase))
+            {
+                var yearString = option
+                    .Replace("r:", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("released:", "", StringComparison.OrdinalIgnoreCase);
+
+                if (int.TryParse(yearString, out var year) && year <= DateTime.UtcNow.Year && year >= 1900)
+                {
+                    topListSettings.ReleaseYearFilter = year;
+                    topListSettings.NewSearchValue = ContainsAndRemove(topListSettings.NewSearchValue, [$"r:{year}", $"released:{year}", option]);
+                }
+            }
+            if (option.StartsWith("d:", StringComparison.OrdinalIgnoreCase) ||
+                option.StartsWith("decade:", StringComparison.OrdinalIgnoreCase))
+            {
+                var yearString = option
+                    .Replace("d:", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("decade:", "", StringComparison.OrdinalIgnoreCase)
+                    .TrimEnd('s')
+                    .TrimEnd('S');
+
+                if (int.TryParse(yearString, out var year))
+                {
+                    if (year < 100)
+                    {
+                        year += year < 30 ? 2000 : 1900;
+                    }
+
+                    year = (year / 10) * 10;
+
+                    if (year <= DateTime.UtcNow.Year && year >= 1900)
+                    {
+                        topListSettings.ReleaseDecadeFilter = year;
+                        topListSettings.NewSearchValue = ContainsAndRemove(topListSettings.NewSearchValue,
+                            [$"d:{year}", $"decade:{year}", $"d:{year}s", $"decade:{year}s", option]);
+                    }
+                }
+            }
         }
 
         return topListSettings;
@@ -606,7 +682,8 @@ public class SettingService
         User user,
         IGuild discordGuild,
         IUser discordUser,
-        bool firstOptionIsLfmUsername = false)
+        bool firstOptionIsLfmUsername = false,
+        bool allowNonFmbot = false)
     {
         string discordUserName;
         if (discordGuild != null)
@@ -661,19 +738,22 @@ public class SettingService
                 return settingsModel;
             }
 
-            if (options.First().Length is >= 3 and <= 15)
+            if (allowNonFmbot)
             {
-                var lfmUserName = options.First().ToLower();
+                if (options.First().Length is >= 3 and <= 15)
+                {
+                    var lfmUserName = options.First().ToLower();
 
-                settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { lfmUserName }, true);
-                settingsModel.UserNameLastFm = lfmUserName;
-                settingsModel.DisplayName = lfmUserName;
-                settingsModel.SessionKeyLastFm = null;
-                settingsModel.RegisteredLastFm = null;
-                settingsModel.UserId = 0;
-                settingsModel.DifferentUser = true;
+                    settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { lfmUserName }, true);
+                    settingsModel.UserNameLastFm = lfmUserName;
+                    settingsModel.DisplayName = lfmUserName;
+                    settingsModel.SessionKeyLastFm = null;
+                    settingsModel.RegisteredLastFm = null;
+                    settingsModel.UserId = 0;
+                    settingsModel.DifferentUser = true;
 
-                return settingsModel;
+                    return settingsModel;
+                }
             }
         }
 
@@ -731,15 +811,18 @@ public class SettingService
                     return settingsModel;
                 }
 
-                settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { lfmUserName }, true);
-                settingsModel.UserNameLastFm = lfmUserName;
-                settingsModel.DisplayName = lfmUserName;
-                settingsModel.SessionKeyLastFm = null;
-                settingsModel.RegisteredLastFm = null;
-                settingsModel.UserId = 0;
-                settingsModel.DifferentUser = true;
+                if (allowNonFmbot)
+                {
+                    settingsModel.NewSearchValue = ContainsAndRemove(settingsModel.NewSearchValue, new[] { lfmUserName }, true);
+                    settingsModel.UserNameLastFm = lfmUserName;
+                    settingsModel.DisplayName = lfmUserName;
+                    settingsModel.SessionKeyLastFm = null;
+                    settingsModel.RegisteredLastFm = null;
+                    settingsModel.UserId = 0;
+                    settingsModel.DifferentUser = true;
 
-                return settingsModel;
+                    return settingsModel;
+                }
             }
         }
 
@@ -854,9 +937,13 @@ public class SettingService
         var options = extraOptions.Split(' ');
         foreach (var option in options)
         {
-            if (option.Length == 4 && int.TryParse(option, out var result))
+            var cleaned = option
+                .Replace("r:", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("released:", "", StringComparison.OrdinalIgnoreCase);
+
+            if (cleaned.Length == 4 && int.TryParse(cleaned, out var result))
             {
-                if (result > 2000 && result <= DateTime.Today.AddDays(1).Year)
+                if (result >= 1900 && result <= DateTime.Today.AddDays(1).Year)
                 {
                     return result;
                 }
@@ -921,7 +1008,12 @@ public class SettingService
 
         if (extraOptions != null)
         {
-            var options = extraOptions.Split(' ');
+            var options = extraOptions
+                .Replace("(", "")
+                .Replace(")", "")
+                .Replace("*", "")
+                .Replace("`", "")
+                .Split(' ');
 
             foreach (var option in options)
             {
@@ -967,16 +1059,22 @@ public class SettingService
         return goalAmount;
     }
 
-    public static int GetMilestoneAmount(
+    public static (int amount, bool isRandom) GetMilestoneAmount(
         string extraOptions,
         long currentPlaycount)
     {
         var goalAmount = 100;
         var ownGoalSet = false;
+        var isRandom = false;
 
         if (extraOptions != null)
         {
-            var options = extraOptions.Split(' ');
+            var options = extraOptions
+                .Replace("(", "")
+                .Replace(")", "")
+                .Replace("*", "")
+                .Replace("`", "")
+                .Split(' ');
 
             foreach (var option in options)
             {
@@ -1004,6 +1102,7 @@ public class SettingService
                 {
                     goalAmount = RandomNumberGenerator.GetInt32(1, (int)currentPlaycount);
                     ownGoalSet = true;
+                    isRandom = true;
                     break;
                 }
             }
@@ -1026,7 +1125,7 @@ public class SettingService
             goalAmount = 1;
         }
 
-        return goalAmount;
+        return (goalAmount, isRandom);
     }
 
     public static GuildRankingSettings SetGuildRankingSettings(GuildRankingSettings guildRankingSettings, string extraOptions)
@@ -1154,10 +1253,10 @@ public class SettingService
 
         foreach (var value in values)
         {
-            if (extraOptions.Contains(value.ToLower()))
+            if (extraOptions.Contains(value.ToLower(), StringComparison.OrdinalIgnoreCase))
             {
                 extraOptions = $" {extraOptions} ";
-                extraOptions = extraOptions.Replace($" {value.ToLower()} ", "");
+                extraOptions = extraOptions.Replace($" {value.ToLower()} ", "", StringComparison.OrdinalIgnoreCase);
                 extraOptions = extraOptions.Trim();
                 somethingFound = true;
             }

@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
@@ -17,10 +18,12 @@ using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
+using Google.Protobuf.WellKnownTypes;
 using Hangfire;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Web.InternalApi;
 using Image = Discord.Image;
 
 namespace FMBot.Bot.Services;
@@ -28,6 +31,7 @@ namespace FMBot.Bot.Services;
 [SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
 public class TimerService
 {
+    private readonly HttpClient _httpClient;
     private readonly UserService _userService;
     private readonly IUpdateService _updateService;
     private readonly IIndexService _indexService;
@@ -40,6 +44,9 @@ public class TimerService
     private readonly IMemoryCache _cache;
     private readonly DiscogsService _discogsService;
     private readonly WhoKnowsFilterService _whoKnowsFilterService;
+    private readonly StatusHandler.StatusHandlerClient _statusHandler;
+    private readonly BotListService _botListService;
+    private readonly EurovisionService _eurovisionService;
 
     public FeaturedLog CurrentFeatured;
 
@@ -54,7 +61,11 @@ public class TimerService
         IMemoryCache cache,
         SupporterService supporterService,
         DiscogsService discogsService,
-        WhoKnowsFilterService whoKnowsFilterService)
+        WhoKnowsFilterService whoKnowsFilterService,
+        StatusHandler.StatusHandlerClient statusHandler,
+        HttpClient httpClient,
+        BotListService botListService,
+        EurovisionService eurovisionService)
     {
         this._client = client;
         this._userService = userService;
@@ -66,6 +77,10 @@ public class TimerService
         this._supporterService = supporterService;
         this._discogsService = discogsService;
         this._whoKnowsFilterService = whoKnowsFilterService;
+        this._statusHandler = statusHandler;
+        this._httpClient = httpClient;
+        this._botListService = botListService;
+        this._eurovisionService = eurovisionService;
         this._updateService = updateService;
         this._botSettings = botSettings.Value;
 
@@ -77,8 +92,8 @@ public class TimerService
         Log.Information($"RecurringJob: Adding {nameof(CheckForNewFeatured)}");
         RecurringJob.AddOrUpdate(nameof(CheckForNewFeatured), () => CheckForNewFeatured(), "*/2 * * * *");
 
-        Log.Information($"RecurringJob: Adding {nameof(UpdateMetricsAndStatus)}");
-        RecurringJob.AddOrUpdate(nameof(UpdateMetricsAndStatus), () => UpdateMetricsAndStatus(), "* * * * *");
+        Log.Information($"RecurringJob: Adding {nameof(UpdateStatus)}");
+        RecurringJob.AddOrUpdate(nameof(UpdateStatus), () => UpdateStatus(), "* * * * *");
 
         Log.Information($"RecurringJob: Adding {nameof(UpdateHealthCheck)}");
         RecurringJob.AddOrUpdate(nameof(UpdateHealthCheck), () => UpdateHealthCheck(), "*/20 * * * * *");
@@ -94,7 +109,8 @@ public class TimerService
 
         if (this._botSettings.LastFm.UserIndexFrequencyInDays != null &&
             this._botSettings.LastFm.UserIndexFrequencyInDays != 0 &&
-            ConfigData.Data.Shards.MainInstance == true)
+            (ConfigData.Data.Shards == null ||
+             ConfigData.Data.Shards.MainInstance == true))
         {
             Log.Information($"RecurringJob: Adding {nameof(AddUsersToIndexQueue)}");
             RecurringJob.AddOrUpdate(nameof(AddUsersToIndexQueue), () => AddUsersToIndexQueue(), "0 8 * * *");
@@ -106,7 +122,8 @@ public class TimerService
 
         if (this._botSettings.LastFm.UserUpdateFrequencyInHours != null &&
             this._botSettings.LastFm.UserUpdateFrequencyInHours != 0 &&
-            ConfigData.Data.Shards.MainInstance == true)
+            (ConfigData.Data.Shards == null ||
+             ConfigData.Data.Shards.MainInstance == true))
         {
             Log.Information($"RecurringJob: Adding {nameof(AddUsersToUpdateQueue)}");
             RecurringJob.AddOrUpdate(nameof(AddUsersToUpdateQueue), () => AddUsersToUpdateQueue(), "0 * * * *");
@@ -116,7 +133,9 @@ public class TimerService
             Log.Warning($"No {nameof(this._botSettings.LastFm.UserUpdateFrequencyInHours)} set in config, not queuing user update job");
         }
 
-        if (this._client.CurrentUser.Id == Constants.BotBetaId && ConfigData.Data.Shards.MainInstance == true)
+        if (this._client.CurrentUser.Id == Constants.BotBetaId &&
+            (ConfigData.Data.Shards == null ||
+             ConfigData.Data.Shards.MainInstance == true))
         {
             Log.Information($"RecurringJob: Adding {nameof(UpdateGlobalWhoKnowsFilters)}");
             RecurringJob.AddOrUpdate(nameof(UpdateGlobalWhoKnowsFilters), () => UpdateGlobalWhoKnowsFilters(), "0 10 * * *");
@@ -131,6 +150,14 @@ public class TimerService
         {
             Log.Warning("Main guild not connected, not queuing master jobs");
             BackgroundJob.Schedule(() => MakeSureMasterJobsAreQueued(), TimeSpan.FromMinutes(2));
+        }
+
+        BackgroundJob.Schedule(() => UpdateEurovisionData(), TimeSpan.FromSeconds(1));
+
+        if (DateTime.Today.Month == 5 || DateTime.Today.Month == 4)
+        {
+            Log.Information($"RecurringJob: Adding {nameof(UpdateEurovisionData)}");
+            RecurringJob.AddOrUpdate(nameof(UpdateEurovisionData), () => UpdateEurovisionData(), "30 */2 * * *");
         }
     }
 
@@ -147,8 +174,14 @@ public class TimerService
     {
         Log.Warning("Queueing master jobs on instance {instance}", ConfigData.Data.Shards?.InstanceName);
 
+        Log.Information($"RecurringJob: Adding {nameof(UpdateMetrics)}");
+        RecurringJob.AddOrUpdate(nameof(UpdateMetrics), () => UpdateMetrics(), "* * * * *");
+
         // Log.Information($"RecurringJob: Adding {nameof(AddLatestDiscordSupporters)}");
-        // RecurringJob.AddOrUpdate(nameof(AddLatestDiscordSupporters), () => AddLatestDiscordSupporters(), "* * * * *");
+        // RecurringJob.AddOrUpdate(nameof(AddLatestDiscordSupporters), () => AddLatestDiscordSupporters(), "*/5 * * * *");
+
+        Log.Information($"RecurringJob: Adding {nameof(AddRoleToNewSupporters)}");
+        RecurringJob.AddOrUpdate(nameof(AddRoleToNewSupporters), () => AddRoleToNewSupporters(), "*/5 * * * *");
 
         // Log.Information($"RecurringJob: Adding {nameof(CheckExpiredDiscordSupporters)}");
         // RecurringJob.AddOrUpdate(nameof(CheckExpiredDiscordSupporters), () => CheckExpiredDiscordSupporters(), "0 8,18 * * *");
@@ -162,58 +195,91 @@ public class TimerService
         // Log.Information($"RecurringJob: Adding {nameof(UpdateExistingOcSupporters)}");
         // RecurringJob.AddOrUpdate(nameof(UpdateExistingOcSupporters), () => UpdateExistingOcSupporters(), "0 * * * *");
 
-        // Log.Information($"RecurringJob: Adding {nameof(CheckDiscordSupportersUserType)}");
-        // RecurringJob.AddOrUpdate(nameof(CheckDiscordSupportersUserType), () => CheckDiscordSupportersUserType(), "30 * * * *");
+        Log.Information($"RecurringJob: Adding {nameof(CheckDiscordSupportersUserType)}");
+        RecurringJob.AddOrUpdate(nameof(CheckDiscordSupportersUserType), () => CheckDiscordSupportersUserType(), "30 * * * *");
 
         // Log.Information($"RecurringJob: Adding {nameof(UpdateDiscogsUsers)}");
         // RecurringJob.AddOrUpdate(nameof(UpdateDiscogsUsers), () => UpdateDiscogsUsers(), "0 12 * * *");
     }
 
-    public async Task UpdateMetricsAndStatus()
+    public async Task UpdateStatus()
     {
-        Log.Information($"Running {nameof(UpdateMetricsAndStatus)}");
-
-        Statistics.RegisteredUserCount.Set(await this._userService.GetTotalUserCountAsync());
-        Statistics.AuthorizedUserCount.Set(await this._userService.GetTotalAuthorizedUserCountAsync());
-        Statistics.RegisteredGuildCount.Set(await this._guildService.GetTotalGuildCountAsync());
-        Statistics.ActiveSupporterCount.Set(await this._supporterService.GetActiveSupporterCountAsync());
-
-        Statistics.OneDayActiveUserCount.Set(await this._userService.GetTotalActiveUserCountAsync(1));
-        Statistics.SevenDayActiveUserCount.Set(await this._userService.GetTotalActiveUserCountAsync(7));
-        Statistics.ThirtyDayActiveUserCount.Set(await this._userService.GetTotalActiveUserCountAsync(30));
+        Log.Information($"Running {nameof(UpdateStatus)}");
 
         try
         {
+            if (this.CurrentFeatured?.Status != null)
+            {
+                await this._client.SetCustomStatusAsync(this.CurrentFeatured.Status);
+                return;
+            }
+
             if (this._client?.Guilds?.Count == null)
             {
-                Log.Information($"Client guild count is null, cancelling {nameof(UpdateMetricsAndStatus)}");
+                Log.Information($"Client guild count is null, cancelling {nameof(UpdateStatus)}");
                 return;
             }
 
             Statistics.ConnectedShards.Set(this._client.Shards.Count(c => c.ConnectionState == ConnectionState.Connected));
             Statistics.ConnectedDiscordServerCount.Set(this._client.Guilds.Count);
 
-            var appInfo = await this._client.GetApplicationInfoAsync();
-            Statistics.TotalDiscordServerCount.Set(appInfo.ApproximateGuildCount.GetValueOrDefault());
-
-            if (string.IsNullOrEmpty(this._botSettings.Bot.Status))
+            if (string.IsNullOrEmpty(this._botSettings.Bot.Status) &&
+                !string.IsNullOrWhiteSpace(this._botSettings.ApiConfig?.InternalEndpoint))
             {
                 if (!PublicProperties.IssuesAtLastFm)
                 {
+                    var overview = await this._statusHandler.GetOverviewAsync(new Empty());
                     await this._client.SetCustomStatusAsync(
-                        $"{this._botSettings.Bot.Prefix}fm — fmbot.xyz — {appInfo.ApproximateGuildCount.GetValueOrDefault()} servers");
+                        $"{this._botSettings.Bot.Prefix}fm — fmbot.xyz — {overview.TotalGuilds} servers");
                 }
                 else
                 {
                     await this._client.SetCustomStatusAsync(
                         $"⚠️ Last.fm is currently experiencing issues -> twitter.com/lastfmstatus");
                 }
-
             }
         }
         catch (Exception e)
         {
-            Log.Error(e, nameof(UpdateMetricsAndStatus));
+            Log.Error(e, nameof(UpdateStatus));
+            throw;
+        }
+    }
+
+    public async Task UpdateMetrics()
+    {
+        Log.Information($"Running {nameof(UpdateMetrics)}");
+
+        Statistics.RegisteredUserCount.Set(await this._userService.GetTotalUserCountAsync());
+        Statistics.AuthorizedUserCount.Set(await this._userService.GetTotalAuthorizedUserCountAsync());
+        Statistics.RegisteredGuildCount.Set(await this._guildService.GetTotalGuildCountAsync());
+        Statistics.ActiveSupporterCount.Set(await this._supporterService.GetActiveSupporterCountAsync());
+        Statistics.ActiveDiscordSupporterCount.Set(await this._supporterService.GetActiveDiscordSupporterCountAsync());
+
+        Statistics.OneDayActiveUserCount.Set(await this._userService.GetTotalActiveUserCountAsync(1));
+        Statistics.SevenDayActiveUserCount.Set(await this._userService.GetTotalActiveUserCountAsync(7));
+        Statistics.ThirtyDayActiveUserCount.Set(await this._userService.GetTotalActiveUserCountAsync(30));
+
+        if (!string.IsNullOrWhiteSpace(this._botSettings.ApiConfig?.InternalEndpoint))
+        {
+            var overview = await this._statusHandler.GetOverviewAsync(new Empty());
+            Statistics.TotalDiscordServerCount.Set(overview.TotalGuilds);
+        }
+
+        try
+        {
+            if (this._client?.Guilds?.Count == null)
+            {
+                Log.Information($"Client guild count is null, cancelling {nameof(UpdateMetrics)}");
+                return;
+            }
+
+            Statistics.ConnectedShards.Set(this._client.Shards.Count(c => c.ConnectionState == ConnectionState.Connected));
+            Statistics.ConnectedDiscordServerCount.Set(this._client.Guilds.Count);
+        }
+        catch (Exception e)
+        {
+            Log.Error(e, nameof(UpdateMetrics));
             throw;
         }
     }
@@ -225,14 +291,30 @@ public class TimerService
         try
         {
             var allShardsConnected = this._client.Shards.All(shard => shard.ConnectionState != ConnectionState.Disconnected) &&
-                               this._client.Shards.All(shard => shard.ConnectionState != ConnectionState.Disconnecting) &&
-                               this._client.Shards.All(shard => shard.ConnectionState != ConnectionState.Connecting);
+                                this._client.Shards.All(shard => shard.ConnectionState != ConnectionState.Disconnecting) &&
+                                this._client.Shards.All(shard => shard.ConnectionState != ConnectionState.Connecting);
 
             if (allShardsConnected)
             {
                 const string path = "healthcheck";
                 await using var fileStream = File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
                 File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+            }
+
+            var currentProcess = Process.GetCurrentProcess();
+            var currentMemoryUsage = currentProcess.WorkingSet64;
+
+            if (!string.IsNullOrWhiteSpace(this._botSettings.ApiConfig?.InternalEndpoint))
+            {
+                await this._statusHandler.SendHeartbeatAsync(new InstanceHeartbeat
+                {
+                    InstanceName = ConfigData.Data.Shards?.InstanceName ?? "unknown",
+                    ConnectedGuilds = this._client?.Guilds?.Count(c => c.IsConnected) ?? 0,
+                    TotalGuilds = this._client?.Guilds?.Count ?? 0,
+                    ConnectedShards = this._client?.Shards?.Count(c => c.ConnectionState == ConnectionState.Connected) ?? 0,
+                    TotalShards = this._client?.Shards?.Count ?? 0,
+                    MemoryBytesUsed = currentMemoryUsage
+                });
             }
         }
         catch (Exception e)
@@ -320,6 +402,7 @@ public class TimerService
             }
         }
 
+        Log.Information($"{nameof(CheckForNewFeatured)}: Setting new featured in bot");
         this.CurrentFeatured = await this._featuredService.GetFeaturedForDateTime(DateTime.UtcNow);
     }
 
@@ -336,6 +419,11 @@ public class TimerService
     public async Task AddLatestDiscordSupporters()
     {
         await this._supporterService.AddLatestDiscordSupporters();
+    }
+
+    public async Task AddRoleToNewSupporters()
+    {
+        await this._supporterService.AddRoleToNewSupporters();
     }
 
     public async Task CheckExpiredDiscordSupporters()
@@ -468,6 +556,11 @@ public class TimerService
         await this._whoKnowsFilterService.AddFilteredUsersToDatabase(filteredUsers);
     }
 
+    public async Task UpdateEurovisionData()
+    {
+        await this._eurovisionService.UpdateEurovisionData();
+    }
+
     public void ClearUserCache()
     {
         var clients = this._client.Shards;
@@ -481,11 +574,20 @@ public class TimerService
     public void ClearInternalLogs()
     {
         PublicProperties.UsedCommandsResponses = new ConcurrentDictionary<ulong, CommandResponse>();
+        PublicProperties.UsedCommandsResponseMessageId = new ConcurrentDictionary<ulong, ulong>();
+        PublicProperties.UsedCommandsResponseContextId = new ConcurrentDictionary<ulong, ulong>();
         PublicProperties.UsedCommandsErrorReferences = new ConcurrentDictionary<ulong, string>();
+        PublicProperties.UsedCommandDiscordUserIds = new ConcurrentDictionary<ulong, ulong>();
         PublicProperties.UsedCommandsArtists = new ConcurrentDictionary<ulong, string>();
         PublicProperties.UsedCommandsAlbums = new ConcurrentDictionary<ulong, string>();
         PublicProperties.UsedCommandsTracks = new ConcurrentDictionary<ulong, string>();
+        PublicProperties.UsedCommandsReferencedMusic = new ConcurrentDictionary<ulong, ReferencedMusic>();
 
         Log.Information("Cleared internal logs");
+    }
+
+    public async Task UpdateBotLists()
+    {
+        await this._botListService.UpdateBotLists();
     }
 }

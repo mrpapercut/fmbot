@@ -16,6 +16,7 @@ public class UserInteraction
     public ulong? DiscordGuildId { get; set; }
     public ulong? DiscordChannelId { get; set; }
     public ulong? DiscordId { get; set; }
+    public ulong? DiscordResponseId { get; set; }
 
     public UserInteractionType Type { get; set; }
 
@@ -31,6 +32,8 @@ public class UserInteraction
     public string Artist { get; set; }
     public string Album { get; set; }
     public string Track { get; set; }
+
+    public bool? HintShown { get; set; }
 
     public User User { get; set; }
 }

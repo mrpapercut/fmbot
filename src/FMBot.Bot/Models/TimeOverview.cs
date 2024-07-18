@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
@@ -7,12 +8,6 @@ namespace FMBot.Bot.Models;
 
 public class DailyOverview
 {
-    public int Uniques { get; set; }
-
-    public int Playcount { get; set; }
-
-    public double AvgPerDay { get; set; }
-
     public List<DayOverview> Days { get; set; }
 }
 

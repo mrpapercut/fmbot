@@ -45,6 +45,7 @@ public class TrackService
     private readonly WhoKnowsTrackService _whoKnowsTrackService;
     private readonly IUpdateService _updateService;
     private readonly AliasService _aliasService;
+    private readonly UserService _userService;
 
     public TrackService(HttpClient httpClient,
         IDataSourceFactory dataSourceFactory,
@@ -56,7 +57,8 @@ public class TrackService
         AlbumService albumService,
         WhoKnowsTrackService whoKnowsTrackService,
         IUpdateService updateService,
-        AliasService aliasService)
+        AliasService aliasService,
+        UserService userService)
     {
         this._dataSourceFactory = dataSourceFactory;
         this._spotifyService = spotifyService;
@@ -69,13 +71,26 @@ public class TrackService
         this._whoKnowsTrackService = whoKnowsTrackService;
         this._updateService = updateService;
         this._aliasService = aliasService;
+        this._userService = userService;
     }
 
     public async Task<TrackSearch> SearchTrack(ResponseModel response, IUser discordUser, string trackValues,
         string lastFmUserName, string sessionKey = null, string otherUserUsername = null, bool useCachedTracks = false,
-        int? userId = null, ulong? interactionId = null)
+        int? userId = null, ulong? interactionId = null, IUserMessage referencedMessage = null)
     {
         string searchValue;
+        if (referencedMessage != null && string.IsNullOrWhiteSpace(trackValues))
+        {
+            var internalLookup = CommandContextExtensions.GetReferencedMusic(referencedMessage.Id)
+                                 ??
+                                 await this._userService.GetReferencedMusic(referencedMessage.Id);
+
+            if (internalLookup?.Track != null)
+            {
+                trackValues = $"{internalLookup.Artist} | {internalLookup.Track}";
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(trackValues) && trackValues.Length != 0)
         {
             searchValue = trackValues;
@@ -115,6 +130,13 @@ public class TrackService
                     {
                         PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, trackInfo.Content.AlbumName);
                     }
+
+                    response.ReferencedMusic = new ReferencedMusic
+                    {
+                        Artist = trackArtist,
+                        Album = trackInfo.Content?.AlbumName,
+                        Track = trackName
+                    };
                 }
 
                 if (!trackInfo.Success && trackInfo.Error == ResponseStatus.MissingParameters)
@@ -181,6 +203,13 @@ public class TrackService
                 {
                     PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, lastPlayedTrack.AlbumName);
                 }
+
+                response.ReferencedMusic = new ReferencedMusic
+                {
+                    Artist = lastPlayedTrack.ArtistName,
+                    Album = lastPlayedTrack.AlbumName,
+                    Track = lastPlayedTrack.TrackName
+                };
             }
 
             if (trackInfo?.Content == null || !trackInfo.Success)
@@ -235,6 +264,13 @@ public class TrackService
                 {
                     PublicProperties.UsedCommandsAlbums.TryAdd(interactionId.Value, trackInfo.Content.AlbumName);
                 }
+
+                response.ReferencedMusic = new ReferencedMusic
+                {
+                    Artist = result.Content.ArtistName,
+                    Album = trackInfo.Content?.AlbumName,
+                    Track = result.Content.TrackName
+                };
             }
 
             return new TrackSearch(trackInfo.Content, response);
@@ -291,7 +327,7 @@ public class TrackService
         return trackInfo;
     }
 
-    public async Task<TrackSearchResult> GetTrackFromLink(string description, bool possiblyContainsLinks = true, bool skipUploaderName = false)
+    public async Task<TrackSearchResult> GetTrackFromLink(string description, bool possiblyContainsLinks = true, bool skipUploaderName = false, bool trackNameFirst = false)
     {
         try
         {
@@ -305,16 +341,29 @@ public class TrackService
 
                 if (matches.Count > 0 && matches[0].Groups.Count > 1)
                 {
-                    var id = matches[0].Groups[2].ToString();
-                    var spotifyResult = await this._spotifyService.GetTrackById(id);
+                    var spotifyId = matches[0].Groups[2].ToString();
 
+                    var internalSpotifyResult = await GetTrackForSpotifyId(spotifyId);
+                    if (internalSpotifyResult != null)
+                    {
+                        return new TrackSearchResult
+                        {
+                            AlbumName = internalSpotifyResult.AlbumName,
+                            ArtistName = internalSpotifyResult.ArtistName,
+                            TrackName = internalSpotifyResult.Name,
+                            DurationMs = internalSpotifyResult.DurationMs
+                        };
+                    }
+
+                    var spotifyResult = await this._spotifyService.GetTrackById(spotifyId);
                     if (spotifyResult != null)
                     {
                         return new TrackSearchResult
                         {
                             AlbumName = spotifyResult.Album.Name,
                             ArtistName = spotifyResult.Artists.First().Name,
-                            TrackName = spotifyResult.Name
+                            TrackName = spotifyResult.Name,
+                            DurationMs = spotifyResult.DurationMs
                         };
                     }
                 }
@@ -336,7 +385,8 @@ public class TrackService
                     {
                         AlbumName = track.AlbumName,
                         ArtistName = track.ArtistName,
-                        TrackName = track.Name
+                        TrackName = track.Name,
+                        DurationMs = track.DurationMs
                     };
                 }
 
@@ -349,6 +399,15 @@ public class TrackService
 
             if (!description.Contains("-"))
             {
+                if (description.Contains(" by ", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new TrackSearchResult
+                    {
+                        TrackName = description.Split(" by ")[0],
+                        ArtistName = description.Split(" by ")[1]
+                    };
+                }
+
                 var lastFmResult = await this._dataSourceFactory.SearchTrackAsync(description);
                 if (lastFmResult.Success && lastFmResult.Content != null)
                 {
@@ -356,7 +415,8 @@ public class TrackService
                     {
                         AlbumName = lastFmResult.Content.AlbumName,
                         ArtistName = lastFmResult.Content.ArtistName,
-                        TrackName = lastFmResult.Content.TrackName
+                        TrackName = lastFmResult.Content.TrackName,
+                        DurationMs = lastFmResult.Content.Duration
                     };
                 }
             }
@@ -377,6 +437,11 @@ public class TrackService
                 {
                     artistName = splitDesc[1];
                     trackName = splitDesc[2];
+                }
+                else if (trackNameFirst)
+                {
+                    artistName = splitDesc[1];
+                    trackName = splitDesc[0];
                 }
                 else
                 {
@@ -415,6 +480,19 @@ public class TrackService
                     }
                 }
 
+                var track = await GetTrackFromDatabase(artistName, trackName);
+
+                if (track != null)
+                {
+                    return new TrackSearchResult
+                    {
+                        AlbumName = track.AlbumName,
+                        ArtistName = track.ArtistName,
+                        TrackName = track.Name,
+                        DurationMs = track.DurationMs
+                    };
+                }
+
                 var trackLfm = await this._dataSourceFactory.GetTrackInfoAsync(trackName, artistName);
 
                 if (trackLfm.Success)
@@ -423,7 +501,8 @@ public class TrackService
                     {
                         TrackName = trackLfm.Content.TrackName,
                         AlbumName = trackLfm.Content.AlbumName,
-                        ArtistName = trackLfm.Content.ArtistName
+                        ArtistName = trackLfm.Content.ArtistName,
+                        DurationMs = trackLfm.Content.Duration
                     };
                 }
             }
@@ -655,6 +734,13 @@ public class TrackService
         await using var db = await this._contextFactory.CreateDbContextAsync();
 
         return await db.Tracks.FindAsync(trackId);
+    }
+
+    public async Task<Track> GetTrackForSpotifyId(string spotifyId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+
+        return await db.Tracks.FirstOrDefaultAsync(f => f.SpotifyId == spotifyId);
     }
 
     public async Task<Track> GetTrackFromDatabase(string artistName, string trackName)

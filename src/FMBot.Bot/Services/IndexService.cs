@@ -8,7 +8,6 @@ using Discord;
 using FMBot.Bot.Extensions;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Models;
-using FMBot.Bot.Services.ThirdParty;
 using FMBot.Domain;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Interfaces;
@@ -16,8 +15,6 @@ using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.EntityFrameWork;
 using FMBot.Persistence.Repositories;
-using Genius.Models.Song;
-using Genius.Models.User;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -278,7 +275,7 @@ public class IndexService : IIndexService
         var topArtists = await this._dataSourceFactory.GetTopArtistsAsync(user.UserNameLastFM,
             new TimeSettingsModel { TimePeriod = TimePeriod.AllTime, PlayDays = 99999, StartDateTime = user.RegisteredLastFm, ApiParameter = "overall" }, 1000, indexLimit);
 
-        if (!topArtists.Success || topArtists.Content.TopArtists == null)
+        if (!topArtists.Success || topArtists.Content?.TopArtists == null || topArtists.Content.TopArtists.Count == 0)
         {
             return new List<UserArtist>();
         }
@@ -301,7 +298,7 @@ public class IndexService : IIndexService
         var recentPlays = await this._dataSourceFactory.GetRecentTracksAsync(user.UserNameLastFM, 1000,
             sessionKey: user.SessionKeyLastFm, amountOfPages: pages);
 
-        if (!recentPlays.Success || recentPlays.Content.RecentTracks.Count == 0)
+        if (!recentPlays.Success || recentPlays.Content?.RecentTracks == null || recentPlays.Content.RecentTracks.Count == 0)
         {
             return new List<UserPlay>();
         }
@@ -328,13 +325,11 @@ public class IndexService : IIndexService
 
         var indexLimit = UserHasHigherIndexLimit(user) ? 200 : 5;
 
-        var topAlbumsList = new List<TopAlbum>();
-
         var topAlbums =
             await this._dataSourceFactory.GetTopAlbumsAsync(user.UserNameLastFM,
                 new TimeSettingsModel { TimePeriod = TimePeriod.AllTime, PlayDays = 99999, StartDateTime = user.RegisteredLastFm, ApiParameter = "overall" }, 1000, indexLimit);
 
-        if (!topAlbums.Success || topAlbums.Content.TopAlbums == null)
+        if (!topAlbums.Success || topAlbums.Content?.TopAlbums == null || topAlbums.Content?.TopAlbums.Count == 0)
         {
             return new List<UserAlbum>();
         }
@@ -358,7 +353,7 @@ public class IndexService : IIndexService
         var trackResult = await this._dataSourceFactory.GetTopTracksAsync(user.UserNameLastFM,
             new TimeSettingsModel { TimePeriod = TimePeriod.AllTime, PlayDays = 99999, StartDateTime = user.RegisteredLastFm, ApiParameter = "overall" }, 1000, indexLimit);
 
-        if (!trackResult.Success || trackResult.Content.TopTracks.Count == 0)
+        if (!trackResult.Success || trackResult.Content?.TopTracks == null || trackResult.Content.TopTracks.Count == 0)
         {
             return new List<UserTrack>();
         }

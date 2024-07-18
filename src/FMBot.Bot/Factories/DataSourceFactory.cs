@@ -204,7 +204,7 @@ public class DataSourceFactory : IDataSourceFactory
 
         if (importUser != null && artist.Success && artist.Content != null)
         {
-            artist.Content.UserPlaycount = await this._playDataSourceRepository.GetArtistPlaycount(importUser, artistName);
+            artist.Content.UserPlaycount = await this._playDataSourceRepository.GetArtistPlaycount(importUser, artist.Content.ArtistName);
         }
 
         return artist;
@@ -256,7 +256,7 @@ public class DataSourceFactory : IDataSourceFactory
         return topAlbums;
     }
 
-    private void AddAlbumTopList(Response<TopAlbumList> topAlbums, string lastFmUserName)
+    public static void AddAlbumTopList(Response<TopAlbumList> topAlbums, string lastFmUserName)
     {
         topAlbums.TopList = topAlbums.Content?.TopAlbums?.Select(s => new TopListObject
         {
@@ -307,6 +307,7 @@ public class DataSourceFactory : IDataSourceFactory
         if (importUser != null && timeSettings.StartDateTime < importUser.LastImportPlay)
         {
             topArtists = await this._playDataSourceRepository.GetTopArtistsAsync(importUser, timeSettings, count * amountOfPages);
+            await CorrectTopArtistNamesInternally(topArtists);
             AddArtistTopList(topArtists, lastFmUserName);
             return topArtists;
         }

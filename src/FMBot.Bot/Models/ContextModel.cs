@@ -15,6 +15,7 @@ public class ContextModel
         this.ContextUser = contextUser;
         this.SlashCommand = false;
         this.InteractionId = context.Message.Id;
+        this.ReferencedMessage = context.Message.ReferencedMessage;
     }
 
     public ContextModel(IInteractionContext context, User contextUser = null, IUser discordContextUser = null)
@@ -37,6 +38,8 @@ public class ContextModel
     public IUser DiscordUser { get; set; }
 
     public ulong InteractionId { get; set; }
+
+    public IUserMessage ReferencedMessage { get; set; }
 
     public User ContextUser { get; set; }
 }

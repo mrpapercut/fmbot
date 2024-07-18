@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -51,11 +50,11 @@ public class WhoKnowsFilterService
 
                 foreach (var user in userPlays)
                 {
-                    var timeListened = await this._timeService.GetPlayTimeForPlays(user.Value);
+                    var timeListened = await this._timeService.EnrichPlaysWithPlayTime(user.Value, true);
 
-                    if (timeListened.TotalHours >= MaxAmountOfHoursPerPeriod)
+                    if (timeListened.totalPlayTime.TotalHours >= MaxAmountOfHoursPerPeriod)
                     {
-                        Log.Information("GWKFilter: Found user {userId} with too much playtime - {totalHours}", user.Key, (int)timeListened.TotalHours);
+                        Log.Information("GWKFilter: Found user {userId} with too much playtime - {totalHours}", user.Key, (int)timeListened.totalPlayTime.TotalHours);
 
                         newFilteredUsers.Add(new GlobalFilteredUser
                         {
@@ -63,7 +62,7 @@ public class WhoKnowsFilterService
                             OccurrenceStart = user.Value.MinBy(b => b.TimePlayed).TimePlayed,
                             OccurrenceEnd = user.Value.MaxBy(b => b.TimePlayed).TimePlayed,
                             Reason = GlobalFilterReason.PlayTimeInPeriod,
-                            ReasonAmount = (int)timeListened.TotalHours,
+                            ReasonAmount = (int)timeListened.totalPlayTime.TotalHours,
                             UserId = user.Key
                         });
                     }
@@ -144,7 +143,8 @@ public class WhoKnowsFilterService
         switch (filteredUser.Reason)
         {
             case GlobalFilterReason.PlayTimeInPeriod:
-                filterInfo.AppendLine($"Had `{filteredUser.ReasonAmount}` hours of listening time");
+                var avgPerDay = filteredUser.ReasonAmount.Value / PeriodAmountOfDays;
+                filterInfo.AppendLine($"Had `{filteredUser.ReasonAmount}` hours of listening time - Around `{avgPerDay}`hr per day");
                 break;
             case GlobalFilterReason.AmountPerPeriod:
                 filterInfo.AppendLine($"Had `{filteredUser.ReasonAmount}` scrobbles ");
@@ -173,7 +173,7 @@ public class WhoKnowsFilterService
         var sql = "SELECT up.* " +
                   "FROM user_plays AS up " +
                   $"WHERE time_played >= current_date - interval '{start}' day AND  time_played <= current_date - interval '{end}' day " +
-                  $"AND user_id  >= {botUserId} AND user_id <= {topUserId}";
+                  $"AND user_id  >= {botUserId} AND user_id <= {topUserId} AND play_source = 0";
 
         DefaultTypeMap.MatchNamesWithUnderscores = true;
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);

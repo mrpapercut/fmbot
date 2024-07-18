@@ -1,12 +1,17 @@
+using System.Linq;
 using System.Threading.Tasks;
 using Discord;
+using Discord.Webhook;
 using Discord.WebSocket;
+using FMBot.Bot.Configurations;
 using FMBot.Bot.Interfaces;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
 using FMBot.Domain.Models;
+using FMBot.Persistence.Domain.Models;
 using Microsoft.Extensions.Options;
+using Serilog;
 
 namespace FMBot.Bot.Handlers;
 
@@ -30,6 +35,8 @@ public class UserEventHandler
         this._client.UserLeft += UserLeft;
         this._client.UserBanned += UserBanned;
         this._client.GuildMemberUpdated += GuildMemberUpdated;
+        this._client.EntitlementCreated += EntitlementCreated;
+        this._client.EntitlementUpdated += EntitlementUpdated;
         this._botSettings = botSettings.Value;
     }
 
@@ -80,6 +87,44 @@ public class UserEventHandler
             {
                 await this._supporterService.ModifyGuildRole(socketGuildUser.Id);
             }
+
+            if (user == null)
+            {
+                var supporterAuditLogChannel = new DiscordWebhookClient(this._botSettings.Bot.SupporterAuditLogWebhookUrl);
+
+                var embed = new EmbedBuilder();
+
+                embed.WithTitle("User without .fmbot account joined");
+                embed.WithDescription($"<@{socketGuildUser.Id}> - `{socketGuildUser.Username}` - **{socketGuildUser.DisplayName}**");
+                embed.WithCurrentTimestamp();
+                embed.WithFooter($"{socketGuildUser.Id}");
+
+                await supporterAuditLogChannel.SendMessageAsync(null, false, new[] { embed.Build() });
+            }
+        }
+    }
+
+    private async Task EntitlementCreated(SocketEntitlement entitlement)
+    {
+        Statistics.DiscordEvents.WithLabels(nameof(EntitlementCreated)).Inc();
+
+        if (entitlement.User.HasValue)
+        {
+            Log.Information("EntitlementCreated - {userId} - received event", entitlement.User.Value.Id);
+
+            await this._supporterService.UpdateSingleDiscordSupporter(entitlement.User.Value.Id);
+        }
+    }
+
+    private async Task EntitlementUpdated(Cacheable<SocketEntitlement, ulong> cacheable, SocketEntitlement entitlement)
+    {
+        Statistics.DiscordEvents.WithLabels(nameof(EntitlementUpdated)).Inc();
+
+        if (entitlement.User.HasValue)
+        {
+            Log.Information("EntitlementUpdated - {userId} - received event", entitlement.User.Value.Id);
+
+            await this._supporterService.UpdateSingleDiscordSupporter(entitlement.User.Value.Id);
         }
     }
 

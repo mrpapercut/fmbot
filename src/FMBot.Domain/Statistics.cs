@@ -74,6 +74,9 @@ public static class Statistics
     public static readonly Counter OpenAiCalls = Metrics
         .CreateCounter("openai_api_calls", "Amount of OpenAI API calls");
 
+    public static readonly Counter AppleMusicApiCalls = Metrics
+        .CreateCounter("applemusic_api_calls", "Amount of Apple Music API calls");
+
 
     public static readonly Counter CommandsExecuted = Metrics
         .CreateCounter("bot_commands_executed", "Amount of commands executed",
@@ -99,6 +102,9 @@ public static class Statistics
 
     public static readonly Counter UserCommandsExecuted = Metrics
         .CreateCounter("bot_user_commands_executed", "Amount of user commands executed");
+
+    public static readonly Counter MessageCommandsExecuted = Metrics
+        .CreateCounter("bot_message_commands_executed", "Amount of message commands executed");
 
     public static readonly Counter AutoCompletesExecuted = Metrics
         .CreateCounter("bot_autocompletes_executed", "Amount of autocompletes executed");
@@ -131,7 +137,10 @@ public static class Statistics
         .CreateGauge("bot_registered_guilds_count", "Total count of all guilds in the database");
 
     public static readonly Gauge ActiveSupporterCount = Metrics
-        .CreateGauge("bot_active_supporter_count", "Total count of all guilds in the database");
+        .CreateGauge("bot_active_supporter_count", "Total count of all active supporters in the database");
+
+    public static readonly Gauge ActiveDiscordSupporterCount = Metrics
+        .CreateGauge("bot_active_discord_supporter_count", "Total count of all active Discord supporters in the database");
 
 
     public static readonly Gauge OneDayActiveUserCount = Metrics

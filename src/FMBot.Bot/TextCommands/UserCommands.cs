@@ -7,7 +7,6 @@ using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Fergun.Interactive;
-using Fergun.Interactive.Extensions;
 using Fergun.Interactive.Selection;
 using FMBot.Bot.Attributes;
 using FMBot.Bot.Builders;
@@ -17,13 +16,10 @@ using FMBot.Bot.Models;
 using FMBot.Bot.Resources;
 using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
-using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
-using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Repositories;
 using FMBot.Persistence.Domain.Models;
 using Microsoft.Extensions.Options;
 
@@ -32,23 +28,16 @@ namespace FMBot.Bot.TextCommands;
 [Name("User settings")]
 public class UserCommands : BaseCommandModule
 {
-    private readonly CrownService _crownService;
-    private readonly FriendsService _friendsService;
-    private readonly FeaturedService _featuredService;
     private readonly GuildService _guildService;
     private readonly IIndexService _indexService;
     private readonly IPrefixService _prefixService;
     private readonly IDataSourceFactory _dataSourceFactory;
     private readonly SettingService _settingService;
-    private readonly TimerService _timer;
     private readonly UserService _userService;
-    public readonly UserBuilder _userBuilder;
+    private readonly UserBuilder _userBuilder;
     private readonly ArtistsService _artistsService;
-    private readonly PlayService _playService;
-    private readonly TimeService _timeService;
-    private readonly CommandService _commands;
     private readonly OpenAiService _openAiService;
-
+    private readonly TimerService _timerService;
 
     private InteractiveService Interactivity { get; }
 
@@ -56,49 +45,37 @@ public class UserCommands : BaseCommandModule
     private static readonly List<SocketUser> StackCooldownTarget = new();
 
     public UserCommands(
-        FriendsService friendsService,
         GuildService guildService,
         IIndexService indexService,
         IPrefixService prefixService,
         IDataSourceFactory dataSourceFactory,
         SettingService settingService,
-        TimerService timer,
         UserService userService,
-        CrownService crownService,
         IOptions<BotSettings> botSettings,
-        FeaturedService featuredService,
         UserBuilder userBuilder,
         InteractiveService interactivity,
         ArtistsService artistsService,
-        PlayService playService,
-        TimeService timeService,
-        CommandService commands,
-        OpenAiService openAiService) : base(botSettings)
+        OpenAiService openAiService,
+        TimerService timerService) : base(botSettings)
     {
-        this._friendsService = friendsService;
         this._guildService = guildService;
         this._indexService = indexService;
         this._dataSourceFactory = dataSourceFactory;
         this._prefixService = prefixService;
         this._settingService = settingService;
-        this._timer = timer;
         this._userService = userService;
-        this._crownService = crownService;
-        this._featuredService = featuredService;
         this._userBuilder = userBuilder;
         this.Interactivity = interactivity;
         this._artistsService = artistsService;
-        this._playService = playService;
-        this._timeService = timeService;
-        this._commands = commands;
         this._openAiService = openAiService;
+        this._timerService = timerService;
     }
 
     [Command("settings", RunMode = RunMode.Async)]
     [Summary("Shows user settings for .fmbot")]
     [UsernameSetRequired]
     [CommandCategories(CommandCategory.ServerSettings)]
-    [Alias("userconfig", "usersettings", "usersetting")]
+    [Alias("userconfig", "usersettings", "usersetting", "setting")]
     public async Task UserSettingsAsync([Remainder] string searchValues = null)
     {
         _ = this.Context.Channel.TriggerTypingAsync();
@@ -108,7 +85,7 @@ public class UserCommands : BaseCommandModule
 
         try
         {
-            var response = await this._userBuilder.GetUserSettings(new ContextModel(this.Context, prfx, contextUser));
+            var response = UserBuilder.GetUserSettings(new ContextModel(this.Context, prfx, contextUser));
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -154,15 +131,20 @@ public class UserCommands : BaseCommandModule
     [CommandCategories(CommandCategory.Other)]
     public async Task LinkAsync([Remainder] string userOptions = null)
     {
-        var user = await this._userService.GetFullUserAsync(this.Context.User.Id);
+        var user = await this._userService.GetUserAsync(this.Context.User.Id);
 
         try
         {
             var userSettings = await this._settingService.GetUser(userOptions, user, this.Context, true);
+            var guildUsers = await this._guildService.GetGuildUsers(this.Context.Guild?.Id);
 
-            if (userSettings.DifferentUser)
+            if (userSettings.DifferentUser && guildUsers.ContainsKey(userSettings.UserId))
             {
                 await this.Context.Channel.SendMessageAsync($"<@{userSettings.DiscordUserId}>'s Last.fm profile: {LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}", allowedMentions: AllowedMentions.None);
+            }
+            else if (userSettings.DifferentUser)
+            {
+                await this.Context.Channel.SendMessageAsync($"Their Last.fm profile: {LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}", allowedMentions: AllowedMentions.None);
             }
             else
             {
@@ -225,7 +207,7 @@ public class UserCommands : BaseCommandModule
         try
         {
             var response =
-                await this._userBuilder.JudgeAsync(new ContextModel(this.Context, prfx, contextUser), userSettings, timeSettings, contextUser.UserType, commandUsesLeft, differentUserButNotAllowed);
+                UserBuilder.JudgeAsync(new ContextModel(this.Context, prfx, contextUser), userSettings, timeSettings, contextUser.UserType, commandUsesLeft, differentUserButNotAllowed);
 
             if (commandUsesLeft <= 0)
             {
@@ -398,13 +380,23 @@ public class UserCommands : BaseCommandModule
 
             if (message != null && response.CommandResponse == CommandResponse.Ok)
             {
-                if (contextUser?.EmoteReactions != null && contextUser.EmoteReactions.Any())
+                PublicProperties.UsedCommandsResponseMessageId.TryAdd(this.Context.Message.Id, message.Id);
+                PublicProperties.UsedCommandsResponseContextId.TryAdd(message.Id, this.Context.Message.Id);
+
+                if (this._timerService.CurrentFeatured?.Reactions != null && this._timerService.CurrentFeatured.Reactions.Any())
                 {
-                    await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
+                    await GuildService.AddReactionsAsync(message, this._timerService.CurrentFeatured.Reactions);
                 }
-                else if (this.Context.Guild != null)
+                else
                 {
-                    await this._guildService.AddGuildReactionsAsync(message, this.Context.Guild, response.Text == "in-server");
+                    if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any() && SupporterService.IsSupporter(contextUser.UserType))
+                    {
+                        await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
+                    }
+                    else if (this.Context.Guild != null)
+                    {
+                        await this._guildService.AddGuildReactionsAsync(message, this.Context.Guild, response.Text == "in-server");
+                    }
                 }
             }
 
@@ -421,7 +413,7 @@ public class UserCommands : BaseCommandModule
 
     [Command("featuredlog", RunMode = RunMode.Async)]
     [Summary("Shows featured history")]
-    [Alias("featuredhistory", "recentfeatured", "rf", "recentlyfeatured", "fl")]
+    [Alias("featuredhistory", "recentfeatured", "rf", "recentlyfeatured", "fl", "flog")]
     [Options("global/server/friends/self")]
     [CommandCategories(CommandCategory.Other)]
     [UsernameSetRequired]
@@ -504,7 +496,7 @@ public class UserCommands : BaseCommandModule
             var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
 
             var response =
-                await this._userBuilder.BotScrobblingAsync(new ContextModel(this.Context, prfx, contextUser));
+                UserBuilder.BotScrobblingAsync(new ContextModel(this.Context, prfx, contextUser));
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -751,7 +743,9 @@ public class UserCommands : BaseCommandModule
             {
                 m.Embed = new EmbedBuilder()
                     .WithDescription($"Login expired. Re-run the command to try again.\n\n" +
-                                     $"Having trouble connecting your Last.fm to .fmbot? Feel free to ask for help on our support server.")
+                                     $"Getting 'Invalid API key' error? This is a [known Last.fm issue](https://support.last.fm/t/invalid-api-key-error-when-connecting-to-discord-fmbot-on-iphone/65329) on iOS. " +
+                                     $"Current workaround is to try connecting on a different device.\n\n" +
+                                     $"Still having trouble connecting your Last.fm to .fmbot? Feel free to ask for help on our support server.")
                     .WithColor(DiscordConstants.WarningColorOrange)
                     .Build();
             });

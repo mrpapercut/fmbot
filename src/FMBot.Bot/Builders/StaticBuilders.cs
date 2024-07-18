@@ -214,8 +214,7 @@ public class StaticBuilders
         return response;
     }
 
-    public async Task<ResponseModel> OpenCollectiveSupportersAsync(
-        ContextModel context)
+    public async Task<ResponseModel> OpenCollectiveSupportersAsync(ContextModel context, bool expiredOnly)
     {
         var response = new ResponseModel
         {
@@ -225,6 +224,19 @@ public class StaticBuilders
         var existingSupporters = await this._supporterService.GetAllSupporters();
 
         var supporters = await this._supporterService.GetOpenCollectiveSupporters();
+
+        if (expiredOnly)
+        {
+            var ocIds = existingSupporters
+                .Where(w => w.SubscriptionType == SubscriptionType.MonthlyOpenCollective && w.OpenCollectiveId != null)
+                .OrderByDescending(o => o.LastPayment)
+                .GroupBy(g => g.OpenCollectiveId)
+                .ToDictionary(d => d.Key, d => d.First());
+            supporters.Users = supporters.Users.Where(w => ocIds.ContainsKey(w.Id) &&
+                                                           ocIds[w.Id].Expired != true &&
+                                                           ocIds[w.Id].SubscriptionType == SubscriptionType.MonthlyOpenCollective &&
+                                                           ocIds[w.Id].LastPayment <= DateTime.UtcNow.AddDays(-61)).ToList();
+        }
 
         var supporterLists = supporters.Users.OrderByDescending(o => o.FirstPayment).Chunk(10);
 
@@ -246,7 +258,7 @@ public class StaticBuilders
                 var firstPayment = DateTime.SpecifyKind(supporter.FirstPayment, DateTimeKind.Utc);
                 var firstPaymentValue = ((DateTimeOffset)firstPayment).ToUnixTimeSeconds();
 
-                if (firstPaymentValue == lastPaymentValue && supporter.SubscriptionType == SubscriptionType.Lifetime)
+                if (firstPaymentValue == lastPaymentValue && supporter.SubscriptionType == SubscriptionType.LifetimeOpenCollective)
                 {
                     supporterString.AppendLine($"Purchase date: <t:{firstPaymentValue}:D>");
                 }
@@ -278,9 +290,9 @@ public class StaticBuilders
                 .WithColor(DiscordConstants.InformationColorBlue)
                 .WithAuthor(response.EmbedAuthor)
                 .WithFooter($"OC: {supporters.Users.Count} - db: {existingSupporters.Count}\n" +
-                            $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Monthly && c.LastPayment >= DateTime.Now.AddDays(-35))} active monthly ({supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Monthly)} total)\n" +
-                            $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Yearly && c.LastPayment >= DateTime.Now.AddDays(-370))} active yearly ({supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Yearly)} total)\n" +
-                            $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.Lifetime)} lifetime")
+                            $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.MonthlyOpenCollective && c.LastPayment >= DateTime.Now.AddDays(-35))} active monthly ({supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.MonthlyOpenCollective)} total)\n" +
+                            $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.YearlyOpenCollective && c.LastPayment >= DateTime.Now.AddDays(-370))} active yearly ({supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.YearlyOpenCollective)} total)\n" +
+                            $"{supporters.Users.Count(c => c.SubscriptionType == SubscriptionType.LifetimeOpenCollective)} lifetime")
                 .WithTitle(".fmbot opencollective supporters overview"));
         }
 

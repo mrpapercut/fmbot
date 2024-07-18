@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 using Discord.Commands;
 using Fergun.Interactive;
@@ -15,9 +14,6 @@ using FMBot.Bot.Services.ThirdParty;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Domain.Types;
-using FMBot.LastFM.Repositories;
-using FMBot.Persistence.Domain.Models;
 using Microsoft.Extensions.Options;
 using Constants = FMBot.Domain.Constants;
 
@@ -184,10 +180,12 @@ public class AlbumCommands : BaseCommandModule
 
     [Command("topalbums", RunMode = RunMode.Async)]
     [Summary("Shows your or someone else's top albums over a certain time period.")]
-    [Options(Constants.CompactTimePeriodList, Constants.UserMentionExample,
-        Constants.BillboardExample, Constants.EmbedSizeExample)]
+    [Options(Constants.CompactTimePeriodList,
+        "Albums released in year: `r:2023`, `released:2023`",
+        "Albums released in decade: `d:80s`, `decade:1990`",
+        Constants.UserMentionExample, Constants.BillboardExample, Constants.EmbedSizeExample)]
     [Examples("tab", "topalbums", "tab a lfm:fm-bot", "topalbums weekly @user", "tab bb xl")]
-    [Alias("abl", "abs", "tab", "albumlist", "top albums", "albums", "albumslist")]
+    [Alias("abl", "abs", "tab", "albumlist", "top albums", "albums", "albumslist", "talbum")]
     [UsernameSetRequired]
     [SupportsPagination]
     [CommandCategories(CommandCategory.Albums)]
@@ -202,9 +200,13 @@ public class AlbumCommands : BaseCommandModule
             var userSettings = await this._settingService.GetUser(extraOptions, contextUser, this.Context);
             var topListSettings = SettingService.SetTopListSettings(extraOptions);
             userSettings.RegisteredLastFm ??= await this._indexService.AddUserRegisteredLfmDate(userSettings.UserId);
-            var timeSettings = SettingService.GetTimePeriod(extraOptions, registeredLastFm: userSettings.RegisteredLastFm);
+            
+            var timeSettings = SettingService.GetTimePeriod(topListSettings.NewSearchValue,
+                topListSettings.ReleaseYearFilter.HasValue || topListSettings.ReleaseDecadeFilter.HasValue ? TimePeriod.AllTime : TimePeriod.Weekly,
+                registeredLastFm: userSettings.RegisteredLastFm,
+                timeZone: userSettings.TimeZone);
             var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
-            var mode = SettingService.SetMode(extraOptions, contextUser.Mode);
+            var mode = SettingService.SetMode(timeSettings.NewSearchValue, contextUser.Mode);
 
             var response = await this._albumBuilders.TopAlbumsAsync(new ContextModel(this.Context, prfx, contextUser),
                 topListSettings, timeSettings, userSettings, mode.mode);

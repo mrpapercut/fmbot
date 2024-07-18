@@ -20,20 +20,12 @@ public class WhoKnowsTrackDto
 
     public string UserNameLastFm { get; set; }
 
-    public string Name { get; set; }
-
-    public string ArtistName { get; set; }
-
     public int Playcount { get; set; }
 }
 
 public class WhoKnowsGlobalTrackDto
 {
     public int UserId { get; set; }
-
-    public string Name { get; set; }
-
-    public string ArtistName { get; set; }
 
     public int Playcount { get; set; }
 
@@ -44,15 +36,6 @@ public class WhoKnowsGlobalTrackDto
     public DateTime? RegisteredLastFm { get; set; }
 
     public PrivacyLevel PrivacyLevel { get; set; }
-}
-
-public class AlbumTrackDto
-{
-    public string TrackName { get; set; }
-
-    public string ArtistName { get; set; }
-
-    public long DurationMs { get; set; }
 }
 
 public class TrackAutoCompleteSearchModel
@@ -81,20 +64,12 @@ public class TrackAutoCompleteSearchModel
     public int? Popularity { get; }
 }
 
-
-public class TrackLengthDto
-{
-    public string ArtistName { get; set; }
-    public string TrackName { get; set; }
-
-    public long DurationMs { get; set; }
-}
-
 public class TrackSearchResult
 {
     public string TrackName { get; set; }
     public string ArtistName { get; set; }
     public string AlbumName { get; set; }
+    public long? DurationMs { get; set; }
 }
 
 

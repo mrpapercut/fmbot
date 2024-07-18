@@ -17,7 +17,6 @@ using FMBot.Domain;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Models;
-using FMBot.LastFM.Domain.Models;
 using Microsoft.Extensions.Options;
 using Serilog;
 
@@ -131,8 +130,9 @@ public class IndexCommands : BaseCommandModule
 
             var update = await this._updateService.UpdateUserAndGetRecentTracks(contextUser);
 
-            var supporterPromo =
+            var updatePromo =
                 await this._supporterService.GetPromotionalUpdateMessage(contextUser, prfx, this.Context.Client, this.Context.Guild?.Id);
+            var upgradeButton = new ComponentBuilder().WithButton(Constants.GetSupporterButton, style: ButtonStyle.Link, url: Constants.GetSupporterDiscordLink);
 
             await message.ModifyAsync(m =>
             {
@@ -172,10 +172,14 @@ public class IndexCommands : BaseCommandModule
                     }
                     else
                     {
-                        if (supporterPromo != null)
+                        if (updatePromo.message != null)
                         {
                             updatedDescription.AppendLine();
-                            updatedDescription.AppendLine(supporterPromo);
+                            updatedDescription.AppendLine(updatePromo.message);
+                            if (updatePromo.showUpgradeButton)
+                            {
+                                m.Components = upgradeButton.Build();
+                            }
                         }
                     }
 
@@ -200,11 +204,11 @@ public class IndexCommands : BaseCommandModule
 
                     if (update.Content.NewRecentTracksAmount < 25)
                     {
-                        var random = new Random().Next(0, 6);
+                        var random = new Random().Next(0, 8);
                         if (random == 1)
                         {
                             updatedDescription.AppendLine();
-                            updatedDescription.AppendLine("Did you know that .fmbot also updates you automatically once every 48 hours?");
+                            updatedDescription.AppendLine("Note that .fmbot also updates you automatically once every 48 hours.");
                         }
                         if (random == 2)
                         {
@@ -213,10 +217,14 @@ public class IndexCommands : BaseCommandModule
                         }
                     }
 
-                    if (supporterPromo != null)
+                    if (updatePromo.message != null)
                     {
                         updatedDescription.AppendLine();
-                        updatedDescription.AppendLine(supporterPromo);
+                        updatedDescription.AppendLine(updatePromo.message);
+                        if (updatePromo.showUpgradeButton)
+                        {
+                            m.Components = upgradeButton.Build();
+                        }
                     }
 
                     m.Embed = new EmbedBuilder()

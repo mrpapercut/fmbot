@@ -1,20 +1,28 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using AngleSharp.Css.Values;
+using CsvHelper;
+using CsvHelper.Configuration;
 using Discord;
 using FMBot.Bot.Models;
 using FMBot.Domain.Enums;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
 using FMBot.Persistence.Repositories;
+using Google.Protobuf.Collections;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Serilog;
+using Web.InternalApi;
 
 namespace FMBot.Bot.Services;
 
@@ -23,12 +31,173 @@ public class ImportService
     private readonly HttpClient _httpClient;
     private readonly TimeService _timeService;
     private readonly BotSettings _botSettings;
+    private readonly TimeEnrichment.TimeEnrichmentClient _timeEnrichment;
+    private readonly ArtistEnrichment.ArtistEnrichmentClient _artistEnrichment;
 
-    public ImportService(HttpClient httpClient, TimeService timeService, IOptions<BotSettings> botSettings)
+
+    public ImportService(HttpClient httpClient, TimeService timeService, IOptions<BotSettings> botSettings, TimeEnrichment.TimeEnrichmentClient timeEnrichment, ArtistEnrichment.ArtistEnrichmentClient artistEnrichment)
     {
         this._httpClient = httpClient;
         this._timeService = timeService;
+        this._timeEnrichment = timeEnrichment;
+        this._artistEnrichment = artistEnrichment;
         this._botSettings = botSettings.Value;
+    }
+
+    public async Task<(ImportStatus status, List<AppleMusicCsvImportModel> result)> HandleAppleMusicFiles(User user, IAttachment attachment)
+    {
+        var appleMusicPlays = new List<AppleMusicCsvImportModel>();
+
+        var csvConfig = new CsvConfiguration(CultureInfo.InvariantCulture)
+        {
+            BadDataFound = null,
+        };
+
+        if (attachment.Filename.EndsWith(".zip"))
+        {
+            await using var stream = await this._httpClient.GetStreamAsync(attachment.Url);
+            using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
+
+            if (!zip.Entries.Any(a => a.FullName.EndsWith("Apple Music Play Activity.csv", StringComparison.OrdinalIgnoreCase)))
+            {
+                var innerZipEntry = zip.Entries.FirstOrDefault(f => f.FullName.EndsWith("Apple_Media_Services.zip", StringComparison.OrdinalIgnoreCase));
+                if (innerZipEntry == null)
+                {
+                    Log.Information("Importing: {userId} / {discordUserId} - HandleAppleMusicFiles - Could not find 'Apple_Media_Services.zip' inside first zip - {zipName}",
+                        user.UserId, user.DiscordUserId, attachment.Filename);
+
+                    return (ImportStatus.UnknownFailure, null);
+                }
+
+                await using var innerZipStream = innerZipEntry.Open();
+                using var innerZip = new ZipArchive(innerZipStream, ZipArchiveMode.Read);
+
+                var csvEntry = innerZip.Entries.FirstOrDefault(f => f.FullName.EndsWith("Apple Music Play Activity.csv", StringComparison.OrdinalIgnoreCase));
+                if (csvEntry != null)
+                {
+                    await ExtractPlaysFromCsv(csvEntry);
+                }
+            }
+            else
+            {
+                var csvEntry = zip.Entries.FirstOrDefault(f => f.FullName.EndsWith("Apple Music Play Activity.csv", StringComparison.OrdinalIgnoreCase));
+                if (csvEntry != null)
+                {
+                    await ExtractPlaysFromCsv(csvEntry);
+                }
+            }
+        }
+        if (attachment.Filename.EndsWith(".csv"))
+        {
+            await using var stream = await this._httpClient.GetStreamAsync(attachment.Url);
+            using var innerCsvStreamReader = new StreamReader(stream);
+
+            using var csv = new CsvReader(innerCsvStreamReader, csvConfig);
+
+            var records = csv.GetRecords<AppleMusicCsvImportModel>();
+            if (records.Any())
+            {
+                appleMusicPlays.AddRange(records.Where(w => w.PlayDurationMs > 0 &&
+                                                            !string.IsNullOrWhiteSpace(w.AlbumName) &&
+                                                            !string.IsNullOrWhiteSpace(w.SongName)).ToList());
+            }
+        }
+
+        if (appleMusicPlays.Any())
+        {
+            return (ImportStatus.Success, appleMusicPlays);
+        }
+
+        return (ImportStatus.UnknownFailure, null);
+
+        async Task ExtractPlaysFromCsv(ZipArchiveEntry csvEntry)
+        {
+            await using var innerCsvStream = csvEntry.Open();
+            using var innerCsvStreamReader = new StreamReader(innerCsvStream);
+
+            var csv = new CsvReader(innerCsvStreamReader, csvConfig);
+
+            var records = csv.GetRecords<AppleMusicCsvImportModel>();
+            if (records.Any())
+            {
+                appleMusicPlays.AddRange(records.Where(w => w.PlayDurationMs > 0 &&
+                                                            !string.IsNullOrWhiteSpace(w.AlbumName) &&
+                                                            !string.IsNullOrWhiteSpace(w.SongName)).ToList());
+            }
+        }
+    }
+
+    public async Task<(RepeatedField<PlayWithoutArtist> userPlays, string matchFoundPercentage)> AppleMusicImportAddArtists(User user, List<AppleMusicCsvImportModel> appleMusicPlays)
+    {
+        var simplePlays = appleMusicPlays
+            .Where(w => w.AlbumName != null &&
+                        w.SongName != null &&
+                        w.PlayDurationMs.HasValue &&
+                        w.MediaDurationMs.HasValue &&
+                        w.EventStartTimestamp.HasValue)
+            .Select(s => new PlayWithoutArtist
+            {
+                ArtistName = s.ArtistName,
+                AlbumName = s.AlbumName
+                    .Replace("- EP", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("- Single", "", StringComparison.OrdinalIgnoreCase)
+                    .TrimEnd(),
+                TrackName = s.SongName,
+                MsPlayed = s.PlayDurationMs.Value,
+                MediaLength = s.MediaDurationMs.Value,
+                Ts = DateTime.SpecifyKind(s.EventStartTimestamp.Value, DateTimeKind.Utc).ToTimestamp()
+            });
+
+        var repeatedField = new RepeatedField<PlayWithoutArtist>();
+        repeatedField.AddRange(simplePlays);
+
+        var appleMusicImports = new PlayWithoutArtistRequest
+        {
+            Plays = { repeatedField }
+        };
+
+        var playsWithArtist = await this._artistEnrichment.AddArtistToPlaysAsync(appleMusicImports);
+
+        Log.Information("Importing: {userId} / {discordUserId} - AppleMusicImportToUserPlays - Total {totalPlays} - Artist found {artistFound} - Artist not found {artistNotFound}",
+            user.UserId, user.DiscordUserId, playsWithArtist.Plays.Count, playsWithArtist.ArtistFound, playsWithArtist.ArtistNotFound);
+
+        var validPlays = playsWithArtist.Plays
+            .Where(w => IsValidScrobble(w.MsPlayed, w.MediaLength)).ToList();
+
+        Log.Information("Importing: {userId} / {discordUserId} - AppleMusicImportToUserPlays - {validScrobbles} plays left after listening time filter",
+            user.UserId, user.DiscordUserId, validPlays.Count);
+
+        return (playsWithArtist.Plays, $"{(decimal)playsWithArtist.ArtistFound / playsWithArtist.Plays.Count:0%}");
+    }
+
+    public static List<UserPlay> AppleMusicImportsToValidUserPlays(User user, RepeatedField<PlayWithoutArtist> appleMusicPlays)
+    {
+        var validPlays = appleMusicPlays
+            .Where(w => IsValidScrobble(w.MsPlayed, w.MediaLength)).ToList();
+
+        Log.Information("Importing: {userId} / {discordUserId} - AppleMusicImportToUserPlays - {validScrobbles} plays left after listening time filter",
+            user.UserId, user.DiscordUserId, validPlays.Count);
+
+        return validPlays.Select(s => new UserPlay
+        {
+            UserId = user.UserId,
+            TimePlayed = DateTime.SpecifyKind(s.Ts.ToDateTime(), DateTimeKind.Utc),
+            ArtistName = !string.IsNullOrWhiteSpace(s.ArtistName) ? s.ArtistName : null,
+            AlbumName = !string.IsNullOrWhiteSpace(s.AlbumName) ? s.AlbumName : null,
+            TrackName = !string.IsNullOrWhiteSpace(s.TrackName) ? s.TrackName : null,
+            MsPlayed = s.MsPlayed,
+            PlaySource = PlaySource.AppleMusicImport
+        }).ToList();
+    }
+
+    private static bool IsValidScrobble(long msPlayed, long mediaLength)
+    {
+        return msPlayed switch
+        {
+            < 30000 => false,
+            > 240000 => true,
+            _ => msPlayed > mediaLength / 2
+        };
     }
 
     public async Task<(ImportStatus status, List<SpotifyEndSongImportModel> result, List<string> processedFiles)> HandleSpotifyFiles(User user, IEnumerable<IAttachment> attachments)
@@ -93,43 +262,44 @@ public class ImportService
 
     public async Task<List<UserPlay>> SpotifyImportToUserPlays(User user, List<SpotifyEndSongImportModel> spotifyPlays)
     {
-        var userPlays = new List<UserPlay>();
+        var simplePlays = spotifyPlays
+            .Where(w => w.MasterMetadataAlbumArtistName != null &&
+                        w.MasterMetadataTrackName != null)
+            .Select(s => new SpotifyImportModel
+            {
+                MsPlayed = s.MsPlayed,
+                MasterMetadataAlbumAlbumName = s.MasterMetadataAlbumAlbumName ?? "",
+                MasterMetadataAlbumArtistName = s.MasterMetadataAlbumArtistName,
+                MasterMetadataTrackName = s.MasterMetadataTrackName,
+                Ts = Timestamp.FromDateTime(s.Ts.ToUniversalTime())
+            });
 
-        var invalidPlays = 0;
+        var repeatedField = new RepeatedField<SpotifyImportModel>();
+        repeatedField.AddRange(simplePlays);
 
-        foreach (var spotifyPlay in spotifyPlays
-                     .Where(w => w.MasterMetadataAlbumArtistName != null &&
-                                 w.MasterMetadataTrackName != null))
+        var spotifyImports = new SpotifyImportsRequest
         {
-            var validScrobble = await this._timeService.IsValidScrobble(
-                spotifyPlay.MasterMetadataAlbumArtistName, spotifyPlay.MasterMetadataTrackName, spotifyPlay.MsPlayed);
+            ImportedEndSongs = { repeatedField }
+        };
 
-            if (validScrobble)
-            {
-                userPlays.Add(new UserPlay
-                {
-                    UserId = user.UserId,
-                    TimePlayed = DateTime.SpecifyKind(spotifyPlay.Ts, DateTimeKind.Utc),
-                    ArtistName = spotifyPlay.MasterMetadataAlbumArtistName,
-                    AlbumName = spotifyPlay.MasterMetadataAlbumAlbumName,
-                    TrackName = spotifyPlay.MasterMetadataTrackName,
-                    PlaySource = PlaySource.SpotifyImport,
-                    MsPlayed = spotifyPlay.MsPlayed
-                });
-            }
-            else
-            {
-                invalidPlays++;
-            }
-        }
+        var filterInvalidPlays = await this._timeEnrichment.FilterInvalidSpotifyImportsAsync(spotifyImports);
 
         Log.Information("Importing: {userId} / {discordUserId} - SpotifyImportToUserPlays found {validPlays} valid plays and {invalidPlays} invalid plays",
-            user.UserId, user.DiscordUserId, userPlays.Count, invalidPlays);
+            user.UserId, user.DiscordUserId, filterInvalidPlays.ValidImports.Count, filterInvalidPlays.InvalidPlays);
 
-        return userPlays;
+        return filterInvalidPlays.ValidImports.Select(s => new UserPlay
+        {
+            UserId = user.UserId,
+            TimePlayed = DateTime.SpecifyKind(s.Ts.ToDateTime(), DateTimeKind.Utc),
+            ArtistName = s.MasterMetadataAlbumArtistName,
+            AlbumName = !string.IsNullOrWhiteSpace(s.MasterMetadataAlbumAlbumName) ? s.MasterMetadataAlbumAlbumName : null,
+            TrackName = s.MasterMetadataTrackName,
+            PlaySource = PlaySource.SpotifyImport,
+            MsPlayed = s.MsPlayed
+        }).ToList();
     }
 
-    public async Task<List<UserPlay>> RemoveDuplicateSpotifyImports(int userId, IEnumerable<UserPlay> userPlays)
+    public async Task<List<UserPlay>> RemoveDuplicateImports(int userId, IEnumerable<UserPlay> userPlays)
     {
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
@@ -137,7 +307,7 @@ public class ImportService
         var existingPlays = await PlayRepository.GetAllUserPlays(userId, connection);
 
         var timestamps = existingPlays
-            .Where(w => w.PlaySource == PlaySource.SpotifyImport)
+            .Where(w => w.PlaySource == PlaySource.SpotifyImport || w.PlaySource == PlaySource.AppleMusicImport)
             .GroupBy(g => g.TimePlayed)
             .ToDictionary(d => d.Key, d => d.ToList());
 
@@ -191,14 +361,24 @@ public class ImportService
         }
     }
 
-    public async Task RemoveImportPlays(User user)
+    public async Task RemoveImportedSpotifyPlays(User user)
     {
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
 
-        await PlayRepository.RemoveAllImportPlays(user.UserId, connection);
+        await PlayRepository.RemoveAllImportedSpotifyPlays(user.UserId, connection);
 
-        Log.Information("Importing: {userId} / {discordUserId} - Removed imported plays", user.UserId, user.DiscordUserId);
+        Log.Information("Importing: {userId} / {discordUserId} - Removed imported Spotify plays", user.UserId, user.DiscordUserId);
+    }
+
+    public async Task RemoveImportedAppleMusicPlays(User user)
+    {
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        await PlayRepository.RemoveAllImportedAppleMusicPlays(user.UserId, connection);
+
+        Log.Information("Importing: {userId} / {discordUserId} - Removed imported Apple Music plays", user.UserId, user.DiscordUserId);
     }
 
     public async Task<bool> HasImported(int userId)
@@ -209,11 +389,23 @@ public class ImportService
         return await PlayRepository.HasImported(userId, connection);
     }
 
-    public static string AddImportDescription(StringBuilder stringBuilder, PlaySource? playSource)
+    public static string AddImportDescription(StringBuilder stringBuilder, List<PlaySource> playSources)
     {
-        if (playSource == PlaySource.SpotifyImport)
+        if (playSources == null || playSources.Count == 0)
+        {
+            return null;
+        }
+        if (playSources.Contains(PlaySource.SpotifyImport) && playSources.Contains(PlaySource.AppleMusicImport))
+        {
+            stringBuilder.AppendLine("Contains imported Spotify and Apple Music plays");
+        }
+        else if (playSources.Contains(PlaySource.SpotifyImport))
         {
             stringBuilder.AppendLine("Contains imported Spotify plays");
+        }
+        else if (playSources.Contains(PlaySource.AppleMusicImport))
+        {
+            stringBuilder.AppendLine("Contains imported Apple Music plays");
         }
 
         return null;

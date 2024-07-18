@@ -11,12 +11,15 @@ public class BotSettings
     public LoggingConfig Logging { get; set; }
 
     public BotConfig Bot { get; set; }
+    
+    public InternalApiConfig ApiConfig { get; set; }
 
     public ShardConfig Shards { get; set; }
 
     public LastFmConfig LastFm { get; set; }
 
     public SpotifyConfig Spotify { get; set; }
+    public AppleMusicConfig AppleMusic { get; set; }
 
     public GeniusConfig Genius { get; set; }
 
@@ -71,6 +74,12 @@ public class BotConfig
     public bool? UseShardEnvConfig { get; set; }
 }
 
+public class InternalApiConfig
+{
+    public string InternalEndpoint { get; set; }
+    public string InternalSecretKey { get; set; }
+}
+
 public class ShardConfig
 {
     public bool? MainInstance { get; set; }
@@ -102,6 +111,13 @@ public class SpotifyConfig
     public string Secret { get; set; }
 }
 
+public class AppleMusicConfig
+{
+    public string Secret { get; set; }
+    public string KeyId { get; set; }
+    public string TeamId { get; set; }
+}
+
 public class DiscogsConfig
 {
     public string Key { get; set; }
@@ -112,9 +128,6 @@ public class DiscogsConfig
 public class OpenAiConfig
 {
     public string Key { get; set; }
-
-    public string ComplimentPrompt { get; set; }
-    public string RoastPrompt { get; set; }
 }
 
 public class GeniusConfig
@@ -127,6 +140,8 @@ public class GoogleConfig
     public string ApiKey { get; set; }
 
     public string InvidiousUrl { get; set; }
+    
+    public string InvidiousBackupUrl { get; set; }
 }
 
 public class BotListConfig

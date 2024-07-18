@@ -6,7 +6,6 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using BotListAPI;
 using Discord;
 using Discord.Commands;
 using Discord.Interactions;
@@ -140,19 +139,51 @@ public class StartupService
         Log.Information("Preparing cache folder");
         PrepareCacheFolder();
 
-        foreach (var shard in this._client.Shards)
-        { 
-            Log.Information("ShardConnectionStart: shard #{shardId}", shard.ShardId);
-            await shard.StartAsync();
+        var gateway = await this._client.GetBotGatewayAsync();
+        Log.Information("ShardStarter: connects left {connectsLeft} - reset after {resetAfter}", gateway.SessionStartLimit.Remaining, gateway.SessionStartLimit.ResetAfter);
 
-            while (shard.ConnectionState != ConnectionState.Connected)
-            {
-                await Task.Delay(100);
-            }
-
+        var maxConcurrency = gateway.SessionStartLimit.MaxConcurrency;
+        if (maxConcurrency > 4)
+        {
+            maxConcurrency = 4;
         }
 
-        await this._timerService.UpdateMetricsAndStatus();
+        Log.Information("ShardStarter: max concurrency {maxConcurrency}, total shards {shardCount}", maxConcurrency, this._client.Shards.Count);
+
+        var connectTasks = new List<Task>();
+        var connectingShards = new List<int>();
+
+        foreach (var shard in this._client.Shards)
+        {
+            Log.Information("ShardConnectionStart: shard #{shardId}", shard.ShardId);
+
+            connectTasks.Add(shard.StartAsync());
+            connectingShards.Add(shard.ShardId);
+
+            if (connectTasks.Count >= maxConcurrency)
+            {
+                await Task.WhenAll(connectTasks);
+
+                while (this._client.Shards
+                       .Where(w => connectingShards.Contains(w.ShardId))
+                       .Any(a => a.ConnectionState != ConnectionState.Connected))
+                {
+                    await Task.Delay(100);
+                }
+
+                Log.Information("ShardStarter: All shards in group concurrently connected");
+                connectTasks = new();
+            }
+        }
+
+        Log.Information("ShardStarter: All connects started, waiting until all are connected");
+        while (this._client.Shards.Any(a => a.ConnectionState != ConnectionState.Connected))
+        {
+            await Task.Delay(100);
+        }
+        Log.Information("ShardStarter: Done");
+
+        await this._timerService.UpdateStatus();
         await this._timerService.UpdateHealthCheck();
 
         InitializeHangfireConfig();
@@ -165,7 +196,6 @@ public class StartupService
         if (ConfigData.Data.Shards == null || ConfigData.Data.Shards.MainInstance == true)
         {
             BackgroundJob.Schedule(() => this.RegisterSlashCommands(), TimeSpan.FromSeconds(startDelay));
-            BackgroundJob.Schedule(() => this.StartBotSiteUpdater(), TimeSpan.FromMinutes(15));
         }
 
         BackgroundJob.Schedule(() => this.CacheSlashCommandIds(), TimeSpan.FromSeconds(startDelay));
@@ -224,7 +254,7 @@ public class StartupService
 
         if (!string.IsNullOrWhiteSpace(ConfigData.Data.Shards?.InstanceName))
         {
-            options.AdditionalLabels= new List<Tuple<string, string>>()
+            options.AdditionalLabels = new List<Tuple<string, string>>()
             {
                 new("instance", ConfigData.Data.Shards.InstanceName)
             };
@@ -248,51 +278,6 @@ public class StartupService
             Log.Information("Registering slash commands globally");
             await this._interactionService.RegisterCommandsGloballyAsync();
 #endif
-    }
-
-    public void StartBotSiteUpdater()
-    {
-        if (!this._client.CurrentUser.Id.Equals(Constants.BotProductionId))
-        {
-            Log.Information("Cancelled botlist updater, non-production bot detected");
-            return;
-        }
-
-        Log.Information("Starting botlist updater");
-
-        var listConfig = new ListConfig();
-
-        if (this._botSettings.BotLists != null)
-        {
-            if (!string.IsNullOrWhiteSpace(this._botSettings.BotLists.TopGgApiToken))
-            {
-                listConfig.TopGG = this._botSettings.BotLists.TopGgApiToken;
-            }
-            if (!string.IsNullOrWhiteSpace(this._botSettings.BotLists.BotsForDiscordToken))
-            {
-                listConfig.BotsForDiscord = this._botSettings.BotLists.BotsForDiscordToken;
-            }
-            if (!string.IsNullOrWhiteSpace(this._botSettings.BotLists.BotsOnDiscordToken))
-            {
-                listConfig.BotsOnDiscord = this._botSettings.BotLists.BotsOnDiscordToken;
-            }
-        }
-        else
-        {
-            Log.Information("Cancelled botlist updater, no botlist tokens in config");
-            return;
-        }
-
-        try
-        {
-            var listClient = new ListClient(this._client, listConfig);
-
-            listClient.Start();
-        }
-        catch (Exception e)
-        {
-            Log.Error(e, "Exception while attempting to start botlist updater!");
-        }
     }
 
     private static void PrepareCacheFolder()

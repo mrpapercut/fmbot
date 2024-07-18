@@ -35,9 +35,12 @@ using RunMode = Discord.Commands.RunMode;
 using Hangfire;
 using FMBot.Domain.Interfaces;
 using FMBot.Bot.Factories;
-using FMBot.Domain.Enums;
 using FMBot.Persistence.Interfaces;
 using System.Linq;
+using FMBot.Bot.Extensions;
+using Web.InternalApi;
+using Discord.Rest;
+using FMBot.AppleMusic;
 
 namespace FMBot.Bot;
 
@@ -87,11 +90,14 @@ public class Startup
             .CreateLogger();
 
         AppDomain.CurrentDomain.UnhandledException += AppUnhandledException;
-             
+
         Log.Information(".fmbot starting up...");
 
         var services = new ServiceCollection(); // Create a new instance of a service collection
         this.ConfigureServices(services);
+
+        // temp fix https://github.com/discord-net/Discord.Net/releases/tag/3.15.0
+        services.AddSingleton<IRestClientProvider>(x => x.GetRequiredService<DiscordShardedClient>());
 
         var provider = services.BuildServiceProvider(); // Build the service provider
         //provider.GetRequiredService<LoggingService>();      // Start the logging service
@@ -159,6 +165,7 @@ public class Startup
             .AddSingleton<AliasService>()
             .AddSingleton<ArtistBuilders>()
             .AddSingleton<AlbumRepository>()
+            .AddSingleton<AppleMusicService>()
             .AddSingleton<AdminService>()
             .AddSingleton<ArtistsService>()
             .AddSingleton<ArtistRepository>()
@@ -172,12 +179,15 @@ public class Startup
             .AddSingleton<CommandHandler>()
             .AddSingleton<DiscogsBuilder>()
             .AddSingleton<DiscogsService>()
+            .AddSingleton<EurovisionBuilders>()
             .AddSingleton<FeaturedService>()
             .AddSingleton<FriendsService>()
             .AddSingleton<FriendBuilders>()
             .AddSingleton<GeniusService>()
             .AddSingleton<GenreBuilders>()
             .AddSingleton<GenreService>()
+            .AddSingleton<GameBuilders>()
+            .AddSingleton<GameService>()
             .AddSingleton<GuildBuilders>()
             .AddSingleton<GuildService>()
             .AddSingleton<GuildSettingBuilder>()
@@ -187,6 +197,11 @@ public class Startup
             .AddSingleton<IIndexService, IndexService>()
             .AddSingleton<IPrefixService, PrefixService>()
             .AddSingleton<ImportBuilders>()
+            .AddSingleton(new InteractiveConfig
+            {
+                ReturnAfterSendingPaginator = true,
+                ProcessSinglePagePaginators = true
+            })
             .AddSingleton<InteractiveService>()
             .AddSingleton<IUserIndexQueue, UserIndexQueue>()
             .AddSingleton<IUserUpdateQueue, UserUpdateQueue>()
@@ -196,6 +211,7 @@ public class Startup
             .AddSingleton<PuppeteerService>()
             .AddSingleton<Random>()
             .AddSingleton<StaticBuilders>()
+            .AddSingleton<MusicDataFactory>()
             .AddSingleton<SettingService>()
             .AddSingleton<StartupService>()
             .AddSingleton<SupporterService>()
@@ -225,6 +241,7 @@ public class Startup
             .AddSingleton<InteractionHandler>()
             .AddSingleton<SmallIndexRepository>();
 
+        services.AddHttpClient<BotListService>();
         services.AddHttpClient<ILastfmApi, LastfmApi>();
         services.AddHttpClient<ChartService>();
         services.AddHttpClient<InvidiousApi>();
@@ -235,6 +252,7 @@ public class Startup
         services.AddHttpClient<DiscordSkuService>();
         services.AddHttpClient<OpenCollectiveService>();
         services.AddHttpClient<OpenAiService>();
+        services.AddHttpClient<EurovisionService>();
 
         services.AddHttpClient<SpotifyService>(client =>
         {
@@ -247,6 +265,26 @@ public class Startup
             client.Timeout = TimeSpan.FromSeconds(10);
         });
 
+        services.AddSingleton<AppleMusicJwtAuthProvider>(provider =>
+            new AppleMusicJwtAuthProvider(
+                ConfigData.Data.AppleMusic.Secret,
+                ConfigData.Data.AppleMusic.KeyId,
+                ConfigData.Data.AppleMusic.TeamId));
+
+        services.AddHttpClient<AppleMusicApi>((provider, client) =>
+        {
+            var authProvider = provider.GetRequiredService<AppleMusicJwtAuthProvider>();
+            var authHeader = authProvider.CreateAuthorizationHeaderAsync().Result;
+            client.DefaultRequestHeaders.Add("Authorization", authHeader);
+            client.BaseAddress = new Uri("https://api.music.apple.com/v1/catalog/us/");
+        });
+
+        services.AddConfiguredGrpcClient<TimeEnrichment.TimeEnrichmentClient>(this.Configuration);
+        services.AddConfiguredGrpcClient<StatusHandler.StatusHandlerClient>(this.Configuration);
+        services.AddConfiguredGrpcClient<AlbumEnrichment.AlbumEnrichmentClient>(this.Configuration);
+        services.AddConfiguredGrpcClient<ArtistEnrichment.ArtistEnrichmentClient>(this.Configuration);
+        services.AddConfiguredGrpcClient<SupporterLinkService.SupporterLinkServiceClient>(this.Configuration);
+
         services.AddHealthChecks();
 
         services.AddDbContextFactory<FMBotDbContext>(b =>
@@ -255,7 +293,6 @@ public class Startup
         services.AddMemoryCache();
     }
 
-    public delegate IPlayDataSourceRepository ServiceResolver(DataSource key);
 
     private static void AppUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {

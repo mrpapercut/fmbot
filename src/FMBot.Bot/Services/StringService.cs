@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using System.Web;
 using Discord;
 using Fergun.Interactive;
 using Fergun.Interactive.Pagination;
@@ -11,6 +10,7 @@ using FMBot.Bot.Resources;
 using FMBot.Domain;
 using FMBot.Domain.Models;
 using FMBot.Persistence.Domain.Models;
+using Google.Protobuf.Reflection;
 using Microsoft.AspNetCore.WebUtilities;
 
 namespace FMBot.Bot.Services;
@@ -36,13 +36,8 @@ public static class StringService
         {
             if (rymEnabled == true)
             {
-                var albumQueryName = track.AlbumName.Replace(" - Single", "");
-                albumQueryName = albumQueryName.Replace(" - EP", "");
-
-                var albumRymUrl = @"https://rateyourmusic.com/search?searchterm=";
-                albumRymUrl += HttpUtility.UrlEncode($"{track.ArtistName} {albumQueryName}");
-                albumRymUrl += "&searchtype=l";
-
+                var albumRymUrl = StringExtensions.GetRymUrl(track.AlbumName, track.ArtistName);
+                
                 description.Append($" • *[{StringExtensions.Sanitize(track.AlbumName)}]({albumRymUrl})*");
             }
             else
@@ -60,6 +55,8 @@ public static class StringService
         var description = new StringBuilder();
 
         description.AppendLine($"**[{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.TrackName, 200))}]({track.TrackUrl})** by **{StringExtensions.Sanitize(track.ArtistName)}**");
+        
+        description.Append("-# ");
 
         if (!track.TimePlayed.HasValue || track.NowPlaying)
         {
@@ -87,6 +84,8 @@ public static class StringService
 
         if (!string.IsNullOrWhiteSpace(track.AlbumName))
         {
+            description.Append("*");
+
             if (rymEnabled == true)
             {
                 var searchTerm = track.AlbumName.Replace(" - Single", "");
@@ -102,17 +101,19 @@ public static class StringService
 
                 if (url.Length < 180)
                 {
-                    description.Append($"*[{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 160))}]({url})*");
+                    description.Append($"[{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 160))}]({url})");
                 }
                 else
                 {
-                    description.Append($"*{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 200))}*");
+                    description.Append($"{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 200))}");
                 }
             }
             else
             {
-                description.Append($"*{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 200))}*");
+                description.Append($"{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 200))}");
             }
+
+            description.Append("*");
         }
 
         description.AppendLine();
@@ -122,20 +123,11 @@ public static class StringService
 
     public static string TrackToString(RecentTrack track)
     {
-        return $"{StringExtensions.Sanitize(track.TrackName)}\n" +
-               $"By **{StringExtensions.Sanitize(track.ArtistName)}**" +
+        return $"**{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.TrackName, 320))}**\n" +
+               $"By **{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.ArtistName, 320))}**" +
                (string.IsNullOrWhiteSpace(track.AlbumName)
                    ? "\n"
-                   : $" | *{StringExtensions.Sanitize(track.AlbumName)}*\n");
-    }
-
-    public static string TrackToOneLinedString(RecentTrack track)
-    {
-        return $"{StringExtensions.Sanitize(track.TrackName)}\n" +
-               $"By **{StringExtensions.Sanitize(track.ArtistName)}**" +
-               (string.IsNullOrWhiteSpace(track.AlbumName)
-                   ? "\n"
-                   : $" | *{StringExtensions.Sanitize(track.AlbumName)}*\n");
+                   : $" | *{StringExtensions.Sanitize(StringExtensions.TruncateLongString(track.AlbumName, 320))}*\n");
     }
 
     public record BillboardLine(string Text, string Name, int PositionsMoved, int NewPosition, int? OldPosition);
@@ -224,20 +216,27 @@ public static class StringService
     }
 
     public static void SinglePageToEmbedResponseWithButton(this ResponseModel response, PageBuilder page,
-        string customOptionId = null,
-        IEmote optionEmote = null, string optionDescription = null)
+        string customOptionId = null, IEmote optionEmote = null, string optionDescription = null, SelectMenuBuilder selectMenu = null)
     {
         response.Embed.WithTitle(page.Title);
         response.Embed.WithAuthor(page.Author);
         response.Embed.WithDescription(page.Description);
         response.Embed.WithUrl(page.Url);
+        response.Embed.WithThumbnailUrl(page.ThumbnailUrl);
         response.Embed.WithFooter(page.Footer);
         response.Embed.Color = null;
 
+        if (customOptionId != null || selectMenu != null)
+        {
+            response.Components = new ComponentBuilder();
+        }
         if (customOptionId != null)
         {
-            response.Components = new ComponentBuilder()
-                .WithButton(customId: customOptionId, emote: optionEmote, label: optionDescription, style:ButtonStyle.Secondary);
+            response.Components.WithButton(customId: customOptionId, emote: optionEmote, label: optionDescription, style: ButtonStyle.Secondary);
+        }
+        if (selectMenu != null)
+        {
+            response.Components.WithSelectMenu(selectMenu);
         }
     }
 
@@ -248,7 +247,11 @@ public static class StringService
             .WithFooter(PaginatorFooter.None)
             .WithActionOnTimeout(ActionOnStop.DeleteInput);
 
-        if (pages.Count != 1 || customOptionId != null)
+        if (pages.Count == 1)
+        {
+            builder.WithOptions(new List<IPaginatorButton> { PaginatorButton.Hidden });
+        }
+        else if (pages.Count != 1 || customOptionId != null)
         {
             builder.WithOptions(DiscordConstants.PaginationEmotes);
         }
@@ -267,16 +270,35 @@ public static class StringService
     }
 
     public static StaticPaginator BuildStaticPaginatorWithSelectMenu(IList<PageBuilder> pages,
-        SelectMenuBuilder selectMenuBuilder)
+        SelectMenuBuilder selectMenuBuilder, string customOptionId = null, IEmote optionEmote = null)
     {
         var builder = new StaticPaginatorBuilder()
             .WithPages(pages)
             .WithFooter(PaginatorFooter.None)
             .WithActionOnTimeout(ActionOnStop.DeleteInput);
 
-        if (pages.Count != 1)
+        if (pages.Count == 1)
+        {
+            builder.WithOptions(new List<IPaginatorButton> { PaginatorButton.Hidden });
+        }
+        else
         {
             builder.WithOptions(DiscordConstants.PaginationEmotes);
+        }
+
+        if (customOptionId != null && optionEmote != null)
+        {
+            builder.AddOption(customOptionId, optionEmote, null, ButtonStyle.Primary);
+        }
+
+        if (pages.Count >= 10 && customOptionId == null)
+        {
+            builder.AddOption(new KeyValuePair<IEmote, PaginatorAction>(Emote.Parse("<:pages_goto:1138849626234036264>"), PaginatorAction.Jump));
+        }
+
+        if (selectMenuBuilder != null)
+        {
+            builder.WithSelectMenus(new List<SelectMenuBuilder> { selectMenuBuilder });
         }
 
         return builder.Build();

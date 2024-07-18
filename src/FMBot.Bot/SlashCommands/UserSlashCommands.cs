@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Discord;
 using Discord.Interactions;
+using Discord.WebSocket;
 using Fergun.Interactive;
 using Fergun.Interactive.Selection;
 using FMBot.Bot.Attributes;
@@ -44,6 +45,8 @@ public class UserSlashCommands : InteractionModuleBase
     private readonly ImportService _importService;
     private readonly IPrefixService _prefixService;
     private readonly AdminService _adminService;
+    private readonly ImportBuilders _importBuilders;
+    private readonly TimerService _timerService;
 
     private readonly BotSettings _botSettings;
 
@@ -61,7 +64,10 @@ public class UserSlashCommands : InteractionModuleBase
         ArtistsService artistsService,
         OpenAiService openAiService,
         ImportService importService,
-        IPrefixService prefixService, AdminService adminService)
+        IPrefixService prefixService,
+        AdminService adminService,
+        ImportBuilders importBuilders,
+        TimerService timerService)
     {
         this._userService = userService;
         this._dataSourceFactory = dataSourceFactory;
@@ -76,18 +82,22 @@ public class UserSlashCommands : InteractionModuleBase
         this._importService = importService;
         this._prefixService = prefixService;
         this._adminService = adminService;
+        this._importBuilders = importBuilders;
+        this._timerService = timerService;
         this._botSettings = botSettings.Value;
     }
 
     [SlashCommand("settings", "Shows user settings for .fmbot")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task UserSettingsAsync()
     {
         try
         {
             var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-            var response = await this._userBuilder.GetUserSettings(new ContextModel(this.Context, contextUser));
+            var response = UserBuilder.GetUserSettings(new ContextModel(this.Context, contextUser));
 
             await this.Context.SendResponse(this.Interactivity, response, ephemeral: true);
             this.Context.LogCommandUsed(response.CommandResponse);
@@ -135,7 +145,7 @@ public class UserSlashCommands : InteractionModuleBase
                     }
                 case UserSetting.BotScrobbling:
                     {
-                        response = await this._userBuilder.BotScrobblingAsync(new ContextModel(this.Context, contextUser));
+                        response = UserBuilder.BotScrobblingAsync(new ContextModel(this.Context, contextUser));
 
                         await this.Context.SendResponse(this.Interactivity, response, ephemeral: true);
                         break;
@@ -151,9 +161,7 @@ public class UserSlashCommands : InteractionModuleBase
                             return;
                         }
 
-                        var hasImported = await this._importService.HasImported(contextUser.UserId);
-
-                        response = UserBuilder.ImportMode(new ContextModel(this.Context, contextUser), hasImported);
+                        response = await this._userBuilder.ImportMode(new ContextModel(this.Context, contextUser), contextUser.UserId);
 
                         await this.Context.SendResponse(this.Interactivity, response, ephemeral: true);
                         break;
@@ -169,7 +177,14 @@ public class UserSlashCommands : InteractionModuleBase
                             return;
                         }
 
-                        response = UserBuilder.UserReactionsAsync(new ContextModel(this.Context, contextUser), prfx);
+                        response = UserBuilder.UserReactions(new ContextModel(this.Context, contextUser), prfx);
+
+                        await this.Context.SendResponse(this.Interactivity, response, ephemeral: true);
+                        break;
+                    }
+                case UserSetting.Localization:
+                    {
+                        response = UserBuilder.Localization(new ContextModel(this.Context, contextUser));
 
                         await this.Context.SendResponse(this.Interactivity, response, ephemeral: true);
                         break;
@@ -195,6 +210,8 @@ public class UserSlashCommands : InteractionModuleBase
     }
 
     [SlashCommand("login", "Gives you a link to connect your Last.fm account to .fmbot")]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task LoginAsync()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
@@ -285,7 +302,9 @@ public class UserSlashCommands : InteractionModuleBase
                 followUpEmbed.WithColor(DiscordConstants.WarningColorOrange);
                 followUpEmbed.WithDescription(
                     $"Login expired. Re-run the command to try again.\n\n" +
-                    $"Having trouble connecting your Last.fm to .fmbot? Feel free to ask for help on our support server.");
+                    $"Getting 'Invalid API key' error? This is a [known Last.fm issue](https://support.last.fm/t/invalid-api-key-error-when-connecting-to-discord-fmbot-on-iphone/65329) on iOS. " +
+                    $"Current workaround is to try connecting on a different device.\n\n" +
+                    $"Still having trouble connecting your Last.fm to .fmbot? Feel free to ask for help on our support server.");
 
                 await FollowupAsync(null, new[] { followUpEmbed.Build() }, ephemeral: true);
 
@@ -300,6 +319,8 @@ public class UserSlashCommands : InteractionModuleBase
 
     [SlashCommand("privacy", "Changes your visibility to other .fmbot users in Global WhoKnows")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task PrivacyAsync()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
@@ -339,7 +360,7 @@ public class UserSlashCommands : InteractionModuleBase
                     globalStatus.AppendLine("You can still use all other functionalities of the bot, you just won't be globally visible when other users use commands. " +
                                             "We moderate global leaderboards to keep them fun and fair for everybody. Remember, it's just a few numbers on a list.");
                 }
-                else if (filteredUser != null && filteredUser.Created > DateTime.UtcNow.AddMonths(-3))
+                else if (filteredUser != null && (filteredUser.OccurrenceEnd ?? filteredUser.Created) > DateTime.UtcNow.AddMonths(-3))
                 {
                     switch (filteredUser.Reason)
                     {
@@ -399,6 +420,8 @@ public class UserSlashCommands : InteractionModuleBase
 
     [SlashCommand("fmmode", "Changes your '/fm' layout")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task FmModeSlashAsync()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
@@ -591,35 +614,49 @@ public class UserSlashCommands : InteractionModuleBase
 
     [SlashCommand("localization", "Configure your timezone in .fmbot")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task SetLocalization([Summary("Timezone", "Timezone you want to set")][Autocomplete(typeof(TimeZoneAutoComplete))] string timezone)
     {
-        var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
+        try
+        {
+            var userSettings = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-        var newTimeZone = await this._userService.SetTimeZone(userSettings.UserId, timezone);
+            var timeZoneInfo = TimeZoneInfo.FindSystemTimeZoneById(timezone);
 
-        var timeZoneInfo = TimeZoneInfo.FindSystemTimeZoneById(newTimeZone);
-        var localTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, timeZoneInfo);
-        var nextMidnight = localTime.Date.AddDays(1);
-        var dateValue = ((DateTimeOffset)TimeZoneInfo.ConvertTimeToUtc(nextMidnight, timeZoneInfo))
-            .ToUnixTimeSeconds();
+            await this._userService.SetTimeZone(userSettings.UserId, timezone);
 
-        var reply = new StringBuilder();
-        reply.AppendLine($"Your timezone has successfully been updated.");
-        reply.AppendLine();
-        reply.AppendLine($"- ID: `{timeZoneInfo.Id}`");
-        reply.AppendLine($"- Zone: `{timeZoneInfo.DisplayName}`");
-        reply.AppendLine($"- Midnight: <t:{dateValue}:t>");
+            var localTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, timeZoneInfo);
+            var nextMidnight = localTime.Date.AddDays(1);
+            var dateValue = ((DateTimeOffset)TimeZoneInfo.ConvertTimeToUtc(nextMidnight, timeZoneInfo))
+                .ToUnixTimeSeconds();
 
-        var embed = new EmbedBuilder();
-        embed.WithColor(DiscordConstants.InformationColorBlue);
-        embed.WithDescription(reply.ToString());
+            var reply = new StringBuilder();
+            reply.AppendLine($"Your timezone has successfully been updated.");
+            reply.AppendLine();
+            reply.AppendLine($"- ID: `{timeZoneInfo.Id}`");
+            reply.AppendLine($"- Zone: `{timeZoneInfo.DisplayName}`");
+            reply.AppendLine($"- Midnight: <t:{dateValue}:t>");
 
-        await RespondAsync(null, new[] { embed.Build() }, ephemeral: true);
-        this.Context.LogCommandUsed();
+            var embed = new EmbedBuilder();
+            embed.WithColor(DiscordConstants.InformationColorBlue);
+            embed.WithDescription(reply.ToString());
+
+            await RespondAsync(null, new[] { embed.Build() }, ephemeral: true);
+            this.Context.LogCommandUsed();
+        }
+        catch (Exception e)
+        {
+            await RespondAsync("Something went wrong while setting localization. Please check if you entered a valid timezone.", ephemeral: true);
+            this.Context.LogCommandUsed(CommandResponse.WrongInput);
+            await this.Context.HandleCommandException(e, sendReply: false);
+        }
     }
 
     [SlashCommand("remove", "Deletes your .fmbot account")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task RemoveAsync()
     {
         var userSettings = await this._userService.GetFullUserAsync(this.Context.User.Id);
@@ -682,6 +719,45 @@ public class UserSlashCommands : InteractionModuleBase
         await FollowupAsync(embeds: new[] { followUpEmbed.Build() }, ephemeral: true);
     }
 
+    [MessageCommand("Delete response")]
+    [UsernameSetRequired]
+    public async Task DeleteResponseAsync(IMessage message)
+    {
+        var interactionToDelete = await this._userService.GetMessageIdToDelete(message.Id);
+
+        if (interactionToDelete == null)
+        {
+            await RespondAsync("No .fmbot response to delete or interaction wasn't stored. \n" +
+                               "You can only use this option on the command itself or on the .fmbot response.", ephemeral: true);
+            return;
+        }
+
+        if (interactionToDelete.DiscordUserId != this.Context.User.Id)
+        {
+            await RespondAsync("You can only delete .fmbot responses to your own commands.", ephemeral: true);
+            return;
+        }
+
+        var fetchedMessage = await this.Context.Channel.GetMessageAsync(interactionToDelete.MessageId);
+
+        if (fetchedMessage == null)
+        {
+            await RespondAsync("Sorry, .fmbot couldn't fetch the message you want to delete.", ephemeral: true);
+            return;
+        }
+
+        var ogMessage = await this.Context.Channel.GetMessageAsync(interactionToDelete.ContextId);
+        if (ogMessage != null)
+        {
+            await ogMessage.AddReactionAsync(new Emoji("🚮"));
+        }
+
+        await fetchedMessage.DeleteAsync(options: new RequestOptions
+        { AuditLogReason = "Deleted through message command " });
+
+        await RespondAsync("Removed .fmbot response.", ephemeral: true);
+        this.Context.LogCommandUsed();
+    }
 
     [SlashCommand("judge", "Judges your music taste using AI")]
     [UsernameSetRequired]
@@ -733,7 +809,7 @@ public class UserSlashCommands : InteractionModuleBase
         try
         {
             var response =
-                await this._userBuilder.JudgeAsync(new ContextModel(this.Context, contextUser), userSettings, timeSettings, contextUser.UserType, commandUsesLeft, differentUserButNotAllowed);
+                UserBuilder.JudgeAsync(new ContextModel(this.Context, contextUser), userSettings, timeSettings, contextUser.UserType, commandUsesLeft, differentUserButNotAllowed);
 
             if (commandUsesLeft <= 0)
             {
@@ -776,6 +852,8 @@ public class UserSlashCommands : InteractionModuleBase
 
     [SlashCommand("featured", "Shows what is currently featured (and the bots avatar)")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task FeaturedAsync()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
@@ -788,23 +866,35 @@ public class UserSlashCommands : InteractionModuleBase
 
         if (message != null && response.CommandResponse == CommandResponse.Ok)
         {
-            if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any())
+            PublicProperties.UsedCommandsResponseMessageId.TryAdd(this.Context.Interaction.Id, message.Id);
+            PublicProperties.UsedCommandsResponseContextId.TryAdd(message.Id, this.Context.Interaction.Id);
+
+            if (this._timerService.CurrentFeatured?.Reactions != null && this._timerService.CurrentFeatured.Reactions.Any())
             {
-                await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
+                await GuildService.AddReactionsAsync(message, this._timerService.CurrentFeatured.Reactions);
             }
-            else if (this.Context.Guild != null)
+            else
             {
-                await this._guildService.AddGuildReactionsAsync(message, this.Context.Guild, response.Text == "in-server");
+                if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any() && SupporterService.IsSupporter(contextUser.UserType))
+                {
+                    await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
+                }
+                else if (this.Context.Guild != null)
+                {
+                    await this._guildService.AddGuildReactionsAsync(message, this.Context.Guild, response.Text == "in-server");
+                }
             }
         }
     }
 
     [SlashCommand("botscrobbling", "Shows info about music bot scrobbling and allows you to change your settings")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.GuildInstall)]
     public async Task BotScrobblingAsync()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
-        var response = await this._userBuilder.BotScrobblingAsync(new ContextModel(this.Context, contextUser));
+        var response = UserBuilder.BotScrobblingAsync(new ContextModel(this.Context, contextUser));
 
         await this.Context.SendResponse(this.Interactivity, response);
         this.Context.LogCommandUsed(response.CommandResponse);
@@ -876,8 +966,47 @@ public class UserSlashCommands : InteractionModuleBase
         this.Context.LogCommandUsed(response.CommandResponse);
     }
 
+    [ComponentInteraction(InteractionConstants.FeaturedLog)]
+    [RequiresIndex]
+    [GuildOnly]
+    public async Task FeaturedLogAsync(string[] inputs)
+    {
+        try
+        {
+            var splitInput = inputs.First().Split("-");
+            if (!Enum.TryParse(splitInput[0], out FeaturedView viewType))
+            {
+                return;
+            }
+
+            var discordUserId = ulong.Parse(splitInput[1]);
+            var requesterDiscordUserId = ulong.Parse(splitInput[2]);
+
+            var contextUser = await this._userService.GetUserWithDiscogs(requesterDiscordUserId);
+            var discordContextUser = await this.Context.Client.GetUserAsync(requesterDiscordUserId);
+            var userSettings = await this._settingService.GetOriginalContextUser(discordUserId, requesterDiscordUserId, this.Context.Guild, this.Context.User);
+
+            var message = (this.Context.Interaction as SocketMessageComponent)?.Message;
+            if (message == null)
+            {
+                return;
+            }
+
+            var response = await this._userBuilder.FeaturedLogAsync(new ContextModel(this.Context, contextUser, discordContextUser), userSettings, viewType);
+
+            await this.Context.UpdateInteractionEmbed(response, this.Interactivity);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
     [SlashCommand("profile", "Shows you or someone else their profile")]
     [UsernameSetRequired]
+    [CommandContextType(InteractionContextType.BotDm, InteractionContextType.PrivateChannel, InteractionContextType.Guild)]
+    [IntegrationType(ApplicationIntegrationType.UserInstall, ApplicationIntegrationType.GuildInstall)]
     public async Task ProfileAsync(
         [Summary("User", "The user of which you want to view their profile")] string user = null)
     {
@@ -955,7 +1084,8 @@ public class UserSlashCommands : InteractionModuleBase
             if (dataSource == DataSource.LastFm)
             {
                 components = new ComponentBuilder()
-                    .WithButton("Also delete all imported plays", InteractionConstants.ImportClear, style: ButtonStyle.Danger);
+                    .WithButton("Delete imported Spotify history", InteractionConstants.ImportClearSpotify, style: ButtonStyle.Danger, row: 0)
+                    .WithButton("Delete imported Apple Music history", InteractionConstants.ImportClearAppleMusic, style: ButtonStyle.Danger, row: 0);
             }
 
             await RespondAsync(null, new[] { embed.Build() }, ephemeral: true, components: components?.Build());
@@ -964,20 +1094,36 @@ public class UserSlashCommands : InteractionModuleBase
             await this._indexService.RecalculateTopLists(newUserSettings);
 
             embed.WithDescription("✅ Your stored top artist/albums/tracks have successfully been recalculated.");
-            await FollowupAsync(null, new[] { embed.Build() }, ephemeral: true, components: components?.Build());
+            await FollowupAsync(null, new[] { embed.Build() }, ephemeral: true);
         }
     }
 
-    [ComponentInteraction(InteractionConstants.ImportClear)]
+    [ComponentInteraction(InteractionConstants.ImportClearSpotify)]
     [UsernameSetRequired]
-    public async Task ClearImports()
+    public async Task ClearImportSpotify()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
 
-        await this._importService.RemoveImportPlays(contextUser);
+        await this._importService.RemoveImportedSpotifyPlays(contextUser);
 
         var embed = new EmbedBuilder();
-        embed.WithDescription($"All your imported plays have been removed from .fmbot.");
+        embed.WithDescription($"All your imported Spotify history has been removed from .fmbot.");
+        embed.WithColor(DiscordConstants.SuccessColorGreen);
+
+        await RespondAsync(null, new[] { embed.Build() }, ephemeral: true);
+        this.Context.LogCommandUsed();
+    }
+
+    [ComponentInteraction(InteractionConstants.ImportClearAppleMusic)]
+    [UsernameSetRequired]
+    public async Task ClearImportAppleMusic()
+    {
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        await this._importService.RemoveImportedAppleMusicPlays(contextUser);
+
+        var embed = new EmbedBuilder();
+        embed.WithDescription($"All your imported Apple Music history has been removed from .fmbot.");
         embed.WithColor(DiscordConstants.SuccessColorGreen);
 
         await RespondAsync(null, new[] { embed.Build() }, ephemeral: true);
@@ -989,13 +1135,51 @@ public class UserSlashCommands : InteractionModuleBase
     public async Task ImportManage()
     {
         var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+        await DeferAsync(true);
 
         try
         {
-            var hasImported = await this._importService.HasImported(contextUser.UserId);
-            var response = UserBuilder.ImportMode(new ContextModel(this.Context, contextUser), hasImported);
+            var response = await this._userBuilder.ImportMode(new ContextModel(this.Context, contextUser), contextUser.UserId);
 
-            await this.Context.SendResponse(this.Interactivity, response, ephemeral: true);
+            await this.Context.SendFollowUpResponse(this.Interactivity, response, ephemeral: true);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [ComponentInteraction(InteractionConstants.ImportInstructionsSpotify)]
+    [UsernameSetRequired]
+    public async Task ImportInstructionsSpotify()
+    {
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        try
+        {
+            var response = await this._importBuilders.GetSpotifyImportInstructions(new ContextModel(this.Context, contextUser), true);
+
+            await this.Context.UpdateInteractionEmbed(response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
+    }
+
+    [ComponentInteraction(InteractionConstants.ImportInstructionsAppleMusic)]
+    [UsernameSetRequired]
+    public async Task ImportInstructionsAppleMusic()
+    {
+        var contextUser = await this._userService.GetUserSettingsAsync(this.Context.User);
+
+        try
+        {
+            var response = await this._importBuilders.GetAppleMusicImportInstructions(new ContextModel(this.Context, contextUser), true);
+
+            await this.Context.UpdateInteractionEmbed(response);
             this.Context.LogCommandUsed(response.CommandResponse);
         }
         catch (Exception e)

@@ -35,19 +35,34 @@ public class UserService
     private readonly BotSettings _botSettings;
     private readonly CountryService _countryService;
     private readonly PlayService _playService;
+    private readonly WhoKnowsArtistService _whoKnowsArtistService;
+    private readonly WhoKnowsAlbumService _whoKnowsAlbumService;
+    private readonly WhoKnowsTrackService _whoKnowsTrackService;
+    private readonly FriendsService _friendsService;
+    private readonly AdminService _adminService;
 
     public UserService(IMemoryCache cache,
         IDbContextFactory<FMBotDbContext> contextFactory,
         IDataSourceFactory dataSourceFactory,
         IOptions<BotSettings> botSettings,
         CountryService countryService,
-        PlayService playService)
+        PlayService playService,
+        WhoKnowsArtistService whoKnowsArtistService,
+        WhoKnowsAlbumService whoKnowsAlbumService,
+        WhoKnowsTrackService whoKnowsTrackService,
+        FriendsService friendsService,
+        AdminService adminService)
     {
         this._cache = cache;
         this._contextFactory = contextFactory;
         this._dataSourceFactory = dataSourceFactory;
         this._countryService = countryService;
         this._playService = playService;
+        this._whoKnowsArtistService = whoKnowsArtistService;
+        this._whoKnowsAlbumService = whoKnowsAlbumService;
+        this._whoKnowsTrackService = whoKnowsTrackService;
+        this._friendsService = friendsService;
+        this._adminService = adminService;
         this._botSettings = botSettings.Value;
     }
 
@@ -173,6 +188,7 @@ public class UserService
     public async Task AddUserTextCommandInteraction(ShardedCommandContext context, string commandName)
     {
         var user = await GetUserSettingsAsync(context.User);
+        PublicProperties.UsedCommandDiscordUserIds.TryAdd(context.Message.Id, context.User.Id);
 
         await Task.Delay(12000);
 
@@ -210,6 +226,18 @@ public class UserService
                     track = fetchedTrack;
                 }
 
+                ulong? responseId = null;
+                if (PublicProperties.UsedCommandsResponseMessageId.TryGetValue(context.Message.Id, out var fetchedResponseId))
+                {
+                    responseId = fetchedResponseId;
+                }
+
+                bool? hintShown = null;
+                if (PublicProperties.UsedCommandsHintShown.Contains(context.Message.Id))
+                {
+                    hintShown = true;
+                }
+
                 var interaction = new UserInteraction
                 {
                     Timestamp = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
@@ -219,12 +247,14 @@ public class UserService
                     DiscordGuildId = context.Guild?.Id,
                     DiscordChannelId = context.Channel?.Id,
                     DiscordId = context.Message.Id,
+                    DiscordResponseId = responseId,
                     Response = commandResponse,
                     Type = UserInteractionType.TextCommand,
                     ErrorReferenceId = errorReference,
                     Artist = artist,
                     Album = album,
-                    Track = track
+                    Track = track,
+                    HintShown = hintShown
                 };
 
                 await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -241,6 +271,7 @@ public class UserService
     public async Task AddUserSlashCommandInteraction(ShardedInteractionContext context, string commandName)
     {
         var user = await GetUserSettingsAsync(context.User);
+        PublicProperties.UsedCommandDiscordUserIds.TryAdd(context.Interaction.Id, context.User.Id);
 
         await Task.Delay(12000);
 
@@ -278,6 +309,18 @@ public class UserService
                     track = fetchedTrack;
                 }
 
+                ulong? responseId = null;
+                if (PublicProperties.UsedCommandsResponseMessageId.TryGetValue(context.Interaction.Id, out var fetchedResponseId))
+                {
+                    responseId = fetchedResponseId;
+                }
+
+                bool? hintShown = null;
+                if (PublicProperties.UsedCommandsHintShown.Contains(context.Interaction.Id))
+                {
+                    hintShown = true;
+                }
+
                 var options = new Dictionary<string, string>();
                 if (context.Interaction is SocketSlashCommand command)
                 {
@@ -296,12 +339,14 @@ public class UserService
                     DiscordGuildId = context.Guild?.Id,
                     DiscordChannelId = context.Channel?.Id,
                     DiscordId = context.Interaction.Id,
+                    DiscordResponseId = responseId,
                     Response = commandResponse,
                     Type = UserInteractionType.SlashCommand,
                     ErrorReferenceId = errorReference,
                     Artist = artist,
                     Album = album,
-                    Track = track
+                    Track = track,
+                    HintShown = hintShown
                 };
 
                 await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -315,6 +360,155 @@ public class UserService
         }
     }
 
+    public async Task UpdateInteractionContextThroughReference(ulong interactionId, bool updateDelay = false, bool updateInternal = true)
+    {
+        if (updateDelay)
+        {
+            await Task.Delay(12000);
+        }
+
+        if (!PublicProperties.UsedCommandsReferencedMusic.TryGetValue(interactionId, out var value))
+        {
+            return;
+        }
+
+        await UpdateInteractionContext(interactionId, value, updateInternal);
+    }
+
+    public async Task UpdateInteractionContext(ulong interactionId, ReferencedMusic responseContext, bool updateInternal = true)
+    {
+        if (updateInternal)
+        {
+            if (PublicProperties.UsedCommandsTracks.TryRemove(interactionId, out _))
+            {
+                PublicProperties.UsedCommandsTracks.TryAdd(interactionId, responseContext.Track);
+            }
+            if (PublicProperties.UsedCommandsAlbums.TryRemove(interactionId, out _))
+            {
+                if (responseContext.Album != null)
+                {
+                    PublicProperties.UsedCommandsAlbums.TryAdd(interactionId, responseContext.Album);
+                }
+            }
+            if (PublicProperties.UsedCommandsArtists.TryRemove(interactionId, out _))
+            {
+                PublicProperties.UsedCommandsArtists.TryAdd(interactionId, responseContext.Artist);
+            }
+        }
+
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var existingInteraction =
+            await db.UserInteractions.FirstOrDefaultAsync(f => f.DiscordId == interactionId);
+
+        if (existingInteraction != null)
+        {
+            existingInteraction.Track = responseContext.Track;
+            existingInteraction.Album = responseContext.Album;
+            existingInteraction.Artist = responseContext.Artist;
+
+            db.UserInteractions.Update(existingInteraction);
+            await db.SaveChangesAsync();
+        }
+    }
+
+    public async Task<bool> InteractionExists(ulong contextMessageId)
+    {
+        if (PublicProperties.UsedCommandsResponseMessageId.ContainsKey(contextMessageId))
+        {
+            return true;
+        }
+
+        const string sql = "SELECT * FROM public.user_interactions WHERE discord_id = @lookupId AND discord_response_id IS NOT NULL";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        var interaction = await connection.QueryFirstOrDefaultAsync<UserInteraction>(sql, new
+        {
+            lookupId = (decimal)contextMessageId
+        });
+
+        if (interaction == null || !interaction.DiscordResponseId.HasValue)
+        {
+            return false;
+        }
+
+        PublicProperties.UsedCommandsResponseMessageId.TryAdd(contextMessageId, interaction.DiscordResponseId.Value);
+        return true;
+    }
+
+    public async Task<ReferencedMusic> GetReferencedMusic(ulong lookupId)
+    {
+        const string sql = "SELECT * FROM public.user_interactions WHERE discord_id = @lookupId OR discord_response_id = @lookupId ";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        var interaction = await connection.QueryFirstOrDefaultAsync<UserInteraction>(sql, new
+        {
+            lookupId = (decimal)lookupId
+        });
+
+        if (interaction is { Artist: not null })
+        {
+            return new ReferencedMusic
+            {
+                Artist = interaction.Artist,
+                Album = interaction.Album,
+                Track = interaction.Track
+            };
+        }
+
+        return null;
+    }
+
+    public record ContextMessageIdAndUserId(ulong ContextId, ulong MessageId, ulong DiscordUserId);
+
+    public async Task<ContextMessageIdAndUserId> GetMessageIdToDelete(ulong lookupId)
+    {
+        if (PublicProperties.UsedCommandsResponseContextId.ContainsKey(lookupId))
+        {
+            PublicProperties.UsedCommandsResponseContextId.TryGetValue(lookupId, out var originalMessageId);
+            PublicProperties.UsedCommandDiscordUserIds.TryGetValue(originalMessageId, out var discordUserId);
+
+            return new ContextMessageIdAndUserId(originalMessageId, lookupId, discordUserId);
+        }
+
+        // Lookup is on the command itself
+        if (PublicProperties.UsedCommandsResponseMessageId.ContainsKey(lookupId) &&
+            PublicProperties.UsedCommandDiscordUserIds.ContainsKey(lookupId))
+        {
+            PublicProperties.UsedCommandsResponseMessageId.TryGetValue(lookupId, out var responseId);
+            PublicProperties.UsedCommandDiscordUserIds.TryGetValue(lookupId, out var discordUserId);
+
+            return new ContextMessageIdAndUserId(lookupId, responseId, discordUserId);
+        }
+
+        const string sql = "SELECT * FROM public.user_interactions WHERE discord_id = @lookupId OR discord_response_id = @lookupId ";
+
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        var interaction = await connection.QueryFirstOrDefaultAsync<UserInteraction>(sql, new
+        {
+            lookupId = (decimal)lookupId
+        });
+
+        if (interaction?.DiscordResponseId != null && interaction.DiscordId.HasValue)
+        {
+            var user = await GetUserForIdAsync(interaction.UserId);
+            if (user != null)
+            {
+                return new ContextMessageIdAndUserId(interaction.DiscordId.Value, interaction.DiscordResponseId.Value, user.DiscordUserId);
+            }
+        }
+
+        return null;
+    }
+
     public async Task<int> GetCommandExecutedAmount(int userId, string command, DateTime filterDateTime)
     {
         await using var db = await this._contextFactory.CreateDbContextAsync();
@@ -323,6 +517,16 @@ public class UserService
                              c.Timestamp >= filterDateTime &&
                              c.Response == CommandResponse.Ok &&
                              c.CommandName == command);
+    }
+
+    public async Task<bool> HintShownBefore(int userId, string command)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        return await db.UserInteractions
+            .AnyAsync(c => c.UserId == userId &&
+                             c.Response == CommandResponse.Ok &&
+                             c.CommandName == command &&
+                             c.HintShown == true);
     }
 
     public async Task SetUserReactionsAsync(int userId, string[] reactions)
@@ -349,6 +553,15 @@ public class UserService
             .ThenInclude(i => i.FriendUser)
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.DiscordUserId == discordUser.Id);
+    }
+    public async Task<User> GetUserWithFriendsAsync(ulong discordUserId)
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        return await db.Users
+            .Include(i => i.Friends)
+            .ThenInclude(i => i.FriendUser)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.DiscordUserId == discordUserId);
     }
 
     public async Task<List<User>> GetAllDiscordUserIds()
@@ -378,7 +591,7 @@ public class UserService
             return user.GlobalName ?? user.Username;
         }
 
-        var guildUser = await guild.GetUserAsync(user.Id);
+        var guildUser = await guild.GetUserAsync(user.Id, CacheMode.CacheOnly);
 
         return guildUser?.DisplayName ?? user.GlobalName ?? user.Username;
     }
@@ -422,7 +635,8 @@ public class UserService
         bool loved,
         long totalScrobbles,
         Persistence.Domain.Models.Guild guild = null,
-        IDictionary<int, FullGuildUser> guildUsers = null)
+        IDictionary<int, FullGuildUser> guildUsers = null,
+        bool useSmallMarkdown = false)
     {
         await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
         await connection.OpenAsync();
@@ -588,7 +802,9 @@ public class UserService
             if (footerOptions.HasFlag(FmFooterOption.ServerArtistRank) || footerOptions.HasFlag(FmFooterOption.ServerArtistListeners))
             {
                 var artistListeners =
-                    await WhoKnowsArtistService.GetBasicUsersForArtist(connection, guild.GuildId, artistName);
+                    await this._whoKnowsArtistService.GetIndexedUsersForArtist(null, guildUsers, guild.GuildId, artistName);
+
+                artistListeners = WhoKnowsService.FilterWhoKnowsObjects(artistListeners, guild).filteredUsers;
 
                 if (artistListeners.Any())
                 {
@@ -611,7 +827,9 @@ public class UserService
             if ((footerOptions.HasFlag(FmFooterOption.ServerAlbumRank) || footerOptions.HasFlag(FmFooterOption.ServerAlbumListeners)) && albumName != null)
             {
                 var albumListeners =
-                    await WhoKnowsAlbumService.GetBasicUsersForAlbum(connection, guild.GuildId, artistName, albumName);
+                    await this._whoKnowsAlbumService.GetIndexedUsersForAlbum(null, guildUsers, guild.GuildId, artistName, albumName);
+
+                albumListeners = WhoKnowsService.FilterWhoKnowsObjects(albumListeners, guild).filteredUsers;
 
                 if (albumListeners.Any())
                 {
@@ -634,7 +852,9 @@ public class UserService
             if (footerOptions.HasFlag(FmFooterOption.ServerTrackRank) || footerOptions.HasFlag(FmFooterOption.ServerTrackListeners))
             {
                 var trackListeners =
-                    await WhoKnowsTrackService.GetBasicUsersFromTrack(connection, guild.GuildId, artistName, trackName);
+                    await this._whoKnowsTrackService.GetIndexedUsersForTrack(null, guildUsers, guild.GuildId, artistName, trackName);
+
+                trackListeners = WhoKnowsService.FilterWhoKnowsObjects(trackListeners, guild).filteredUsers;
 
                 if (trackListeners.Any())
                 {
@@ -741,7 +961,14 @@ public class UserService
             }
         }
 
-        return CreateFooter(options, genres);
+        var eurovision = EurovisionService.GetEurovisionEntry(artistName, trackName);
+        if (eurovision != null)
+        {
+            var description = EurovisionService.GetEurovisionDescription(eurovision);
+            options.Add(description.oneline);
+        }
+
+        return CreateFooter(options, genres, useSmallMarkdown);
     }
 
     private static int GetAgeInYears(DateTime birthDate)
@@ -757,14 +984,22 @@ public class UserService
         return age;
     }
 
-    private static StringBuilder CreateFooter(IReadOnlyList<string> options, string genres)
+    private static StringBuilder CreateFooter(IReadOnlyList<string> options, string genres, bool useSmallMarkdown)
     {
         var footer = new StringBuilder();
 
         var genresAdded = false;
         if (genres != null && genres.Length <= 48 && options.Count > 2)
         {
+            if (useSmallMarkdown)
+            {
+                footer.Append("-# ");
+            }
             footer.AppendLine(genres);
+            if (useSmallMarkdown)
+            {
+                footer.Append("-# ");
+            }
             genresAdded = true;
         }
 
@@ -777,6 +1012,10 @@ public class UserService
             if ((lineLength > 38 || (lineLength > 28 && option.Length > 18)) && nextOption != null)
             {
                 footer.AppendLine();
+                if (useSmallMarkdown)
+                {
+                    footer.Append("-# ");
+                }
                 lineLength = option.Length;
                 footer.Append(option);
             }
@@ -799,6 +1038,10 @@ public class UserService
 
         if (!genresAdded && genres != null)
         {
+            if (useSmallMarkdown)
+            {
+                footer.Append("-# ");
+            }
             footer.AppendLine(genres);
         }
 
@@ -1008,6 +1251,7 @@ public class UserService
         var user = await db.Users.FirstAsync(f => f.UserId == userId);
 
         user.PrivacyLevel = privacyLevel;
+        db.Entry(user).State = EntityState.Modified;
 
         db.Update(user);
 
@@ -1024,7 +1268,13 @@ public class UserService
 
         var user = await db.Users.FirstAsync(f => f.UserId == userId);
 
+        if (timeZone == "null")
+        {
+            timeZone = null;
+        }
+
         user.TimeZone = timeZone;
+        db.Entry(user).State = EntityState.Modified;
 
         db.Update(user);
 
@@ -1056,7 +1306,10 @@ public class UserService
         await using var db = await this._contextFactory.CreateDbContextAsync();
         var user = await db.Users.FirstAsync(f => f.UserId == userToUpdate.UserId);
 
+        userToUpdate.DataSource = dataSource;
+
         user.DataSource = dataSource;
+        db.Entry(user).State = EntityState.Modified;
 
         db.Update(user);
 
@@ -1073,6 +1326,7 @@ public class UserService
         var user = await db.Users.FirstAsync(f => f.UserId == userToUpdate.UserId);
 
         user.FmFooterOptions = fmFooterOption;
+        db.Entry(user).State = EntityState.Modified;
 
         db.Update(user);
 
@@ -1091,6 +1345,7 @@ public class UserService
         user.Mode = mode;
 
         db.Update(user);
+        db.Entry(user).State = EntityState.Modified;
 
         await db.SaveChangesAsync();
 
@@ -1108,6 +1363,11 @@ public class UserService
             var user = await db.Users
                 .AsQueryable()
                 .FirstOrDefaultAsync(f => f.UserId == userId);
+
+            if (user == null)
+            {
+                return;
+            }
 
             await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
             await connection.OpenAsync();
@@ -1154,6 +1414,7 @@ public class UserService
         }
 
         db.Update(userToUpdate);
+        db.Entry(userToUpdate).State = EntityState.Modified;
 
         await db.SaveChangesAsync();
 
@@ -1169,6 +1430,7 @@ public class UserService
         var user = await db.Users.FirstAsync(f => f.UserId == userId);
 
         user.MusicBotTrackingDisabled = disabled;
+        db.Entry(user).State = EntityState.Modified;
 
         db.Update(user);
 
@@ -1210,36 +1472,98 @@ public class UserService
         var deletedInactiveUsers = 0;
 
         await using var db = await this._contextFactory.CreateDbContextAsync();
-        var inactiveUsers = await db.InactiveUsers
+        var inactiveUsers = await db.InactiveUserLog
             .AsQueryable()
-            .Where(w => w.MissingParametersErrorCount >= 1 && w.Updated > DateTime.UtcNow.AddDays(-3))
+            .Include(i => i.User)
+            .Where(w => w.ResponseStatus == ResponseStatus.MissingParameters)
+            .GroupBy(g => g.UserId)
             .ToListAsync();
 
         foreach (var inactiveUser in inactiveUsers)
         {
-            var user = await db.Users
-                .AsQueryable()
-                .FirstOrDefaultAsync(f => f.UserId == inactiveUser.UserId &&
-                                          (f.LastUsed == null || f.LastUsed < DateTime.UtcNow.AddDays(-30)) &&
-                                          string.IsNullOrWhiteSpace(f.SessionKeyLastFm));
-
-            if (user != null)
+            if (inactiveUser.First().User != null && (inactiveUser.First().User.LastUsed == null || inactiveUser.First().User.LastUsed < DateTime.UtcNow.AddDays(-30)))
             {
-                if (!await this._dataSourceFactory.LastFmUserExistsAsync(user.UserNameLastFM))
+                var userExists =
+                    await this._dataSourceFactory.LastFmUserExistsAsync(inactiveUser.First().UserNameLastFM);
+                var profile =
+                    await this._dataSourceFactory.GetLfmUserInfoAsync(inactiveUser.First().UserNameLastFM);
+
+                if (!userExists && profile == null)
                 {
-                    await DeleteUser(user.UserId);
-                    Log.Information("DeleteInactiveUsers: User {userNameLastFm} | {userId} | {discordUserId} deleted", user.UserNameLastFM, user.UserId, user.DiscordUserId);
+                    await this._friendsService.RemoveAllFriendsAsync(inactiveUser.Key);
+                    await this._friendsService.RemoveUserFromOtherFriendsAsync(inactiveUser.Key);
+
+                    await DeleteUser(inactiveUser.Key);
+
+                    Log.Information("DeleteInactiveUsers: User {userNameLastFm} | {userId} | {discordUserId} deleted", inactiveUser.First().User.UserNameLastFM, inactiveUser.Key, inactiveUser.First().User.DiscordUserId);
                     deletedInactiveUsers++;
+
+                    var otherUsers = await this._adminService.GetUsersWithLfmUsernameAsync(inactiveUser.First().User.UserNameLastFM);
+                    foreach (var otherUser in otherUsers.Where(w => w.UserId != inactiveUser.Key && (w.LastUsed == null || w.LastUsed < DateTime.UtcNow.AddDays(-30))))
+                    {
+                        await this._friendsService.RemoveAllFriendsAsync(otherUser.UserId);
+                        await this._friendsService.RemoveUserFromOtherFriendsAsync(otherUser.UserId);
+
+                        await DeleteUser(otherUser.UserId);
+
+                        Log.Information("DeleteInactiveUsers: OtherUser {userNameLastFm} | {userId} | {discordUserId} deleted", otherUser.UserNameLastFM, otherUser.UserId, otherUser.DiscordUserId);
+                        deletedInactiveUsers++;
+                    }
                 }
                 else
                 {
-                    Log.Information("DeleteInactiveUsers: User {userNameLastFm} exists, so deletion cancelled", user.UserNameLastFM);
+                    Log.Information("DeleteInactiveUsers: User {userNameLastFm} exists, so deletion cancelled", inactiveUser.First().User.UserNameLastFM);
                 }
 
-                Thread.Sleep(250);
+                Thread.Sleep(800);
             }
         }
 
         return deletedInactiveUsers;
+    }
+
+    public async Task<int> DeleteOldDuplicateUsers()
+    {
+        await using var db = await this._contextFactory.CreateDbContextAsync();
+        var counter = 0;
+
+        var groupedUsers = await db.Users
+            .GroupBy(g => g.UserNameLastFM)
+            .ToListAsync();
+
+        var usersWithTooManyAccounts = groupedUsers
+            .Where(w => w.Count() > 1 && w.Any(a => a.LastUsed > DateTime.UtcNow.AddMonths(-12)));
+
+        await using var connection = new NpgsqlConnection(this._botSettings.Database.ConnectionString);
+        await connection.OpenAsync();
+
+        foreach (var groupedUser in usersWithTooManyAccounts)
+        {
+            var lastUsedAccount = groupedUser.OrderByDescending(o => o.LastUsed).First();
+
+            var anyDeleted = false;
+            foreach (var oldUnusedAccount in groupedUser
+                         .Where(w => w.LastUsed == null || w.LastUsed < DateTime.UtcNow.AddMonths(-24)))
+            {
+                //await PlayRepository.MoveFeaturedLogs(oldUnusedAccount.UserId, lastUsedAccount.UserId, connection);
+                //await PlayRepository.MoveFriends(oldUnusedAccount.UserId, lastUsedAccount.UserId, connection);
+
+                //await this._friendsService.RemoveAllFriendsAsync(oldUnusedAccount.UserId);
+                //await DeleteUser(oldUnusedAccount.UserId);
+
+                Log.Information("DeleteOldDuplicateUsers: User {userNameLastFm} | {userId} | {discordUserId} - Last used {lastUsed}", oldUnusedAccount.UserNameLastFM, oldUnusedAccount.UserId, oldUnusedAccount.DiscordUserId, oldUnusedAccount.LastUsed);
+                counter++;
+                anyDeleted = true;
+            }
+
+            if (anyDeleted)
+            {
+                Log.Information("DeleteOldDuplicateUsers: Main {userNameLastFm} | {userId} | {discordUserId} - Last used {lastUsed}", lastUsedAccount.UserNameLastFM, lastUsedAccount.UserId, lastUsedAccount.DiscordUserId, lastUsedAccount.LastUsed);
+            }
+        }
+
+        await connection.CloseAsync();
+
+        return counter;
     }
 }

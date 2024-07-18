@@ -65,8 +65,8 @@ public class PlayCommands : BaseCommandModule
 
     [Command("fm", RunMode = RunMode.Async)]
     [Summary("Shows you or someone else their current track")]
-    [Alias("np", "qm", "wm", "em", "rm", "tm", "ym", "om", "pm", "gm", "sm", "am", "hm", "jm", "km",
-        "lm", "zm", "xm", "cm", "vm", "bm", "nm", "mm", "lastfm", "nowplaying")]
+    [Alias("np", "qm", "wm", "em", "rm", "tm", "ym", "om", "pm", "gm", "sm", "hm", "jm", "km",
+        "lm", "zm", "xm", "cm", "vm", "bm", "nm", "mm", "nowplaying")]
     [UsernameSetRequired]
     [CommandCategories(CommandCategory.Tracks)]
     public async Task NowPlayingAsync([Remainder] string options = null)
@@ -160,11 +160,14 @@ public class PlayCommands : BaseCommandModule
                 message = await ReplyAsync(response.Text, allowedMentions: AllowedMentions.None);
             }
 
+            PublicProperties.UsedCommandsResponseMessageId.TryAdd(this.Context.Message.Id, message.Id);
+            PublicProperties.UsedCommandsResponseContextId.TryAdd(message.Id, this.Context.Message.Id);
+
             try
             {
                 if (message != null && response.CommandResponse == CommandResponse.Ok)
                 {
-                    if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any())
+                    if (contextUser.EmoteReactions != null && contextUser.EmoteReactions.Any() && SupporterService.IsSupporter(contextUser.UserType))
                     {
                         await GuildService.AddReactionsAsync(message, contextUser.EmoteReactions);
                     }
@@ -203,8 +206,8 @@ public class PlayCommands : BaseCommandModule
 
     [Command("recent", RunMode = RunMode.Async)]
     [Summary("Shows you or someone else their recent tracks")]
-    [Options("Amount of recent tracks to show (max 10)", Constants.UserMentionExample)]
-    [Examples("recent", "r", "recent 8", "recent 5 @user", "recent lfm:fm-bot")]
+    [Options(Constants.UserMentionExample)]
+    [Examples("recent", "r", "recent @user", "recent lfm:fm-bot")]
     [Alias("recenttracks", "recents", "r", "rc")]
     [UsernameSetRequired]
     [CommandCategories(CommandCategory.Tracks)]
@@ -306,8 +309,14 @@ public class PlayCommands : BaseCommandModule
         var userInfo = await this._dataSourceFactory.GetLfmUserInfoAsync(userSettings.UserNameLastFm);
 
         var goalAmount = SettingService.GetGoalAmount(extraOptions, userInfo.Playcount);
-        var timeSettings = SettingService.GetTimePeriod(extraOptions, TimePeriod.AllTime);
+        var timeSettings = SettingService.GetTimePeriod(extraOptions, TimePeriod.AllTime, timeZone: userSettings.TimeZone);
         var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+
+        if (string.IsNullOrWhiteSpace(extraOptions) &&
+            !string.IsNullOrWhiteSpace(this.Context.Message.ReferencedMessage?.Content))
+        {
+            goalAmount = SettingService.GetGoalAmount(this.Context.Message.ReferencedMessage.Content, userInfo.Playcount);
+        }
 
         var response = await this._playBuilder.PaceAsync(new ContextModel(this.Context, prfx, contextUser),
             userSettings, timeSettings, goalAmount, userInfo.Playcount, userInfo.RegisteredUnix);
@@ -329,16 +338,29 @@ public class PlayCommands : BaseCommandModule
 
         _ = this.Context.Channel.TriggerTypingAsync();
 
-        var userSettings = await this._settingService.GetUser(extraOptions, contextUser, this.Context);
+        try
+        {
+            var userSettings = await this._settingService.GetUser(extraOptions, contextUser, this.Context);
 
-        var userInfo = await this._dataSourceFactory.GetLfmUserInfoAsync(userSettings.UserNameLastFm);
-        var mileStoneAmount = SettingService.GetMilestoneAmount(extraOptions, userInfo.Playcount);
-        var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
+            var userInfo = await this._dataSourceFactory.GetLfmUserInfoAsync(userSettings.UserNameLastFm);
+            var mileStoneAmount = SettingService.GetMilestoneAmount(extraOptions, userInfo.Playcount);
+            var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
-        var response = await this._playBuilder.MileStoneAsync(new ContextModel(this.Context, prfx, contextUser), userSettings, mileStoneAmount, userInfo.Playcount);
+            if (string.IsNullOrWhiteSpace(extraOptions) &&
+                !string.IsNullOrWhiteSpace(this.Context.Message.ReferencedMessage?.Content))
+            {
+                mileStoneAmount = SettingService.GetMilestoneAmount(this.Context.Message.ReferencedMessage.Content, userInfo.Playcount);
+            }
 
-        await this.Context.SendResponse(this.Interactivity, response);
-        this.Context.LogCommandUsed(response.CommandResponse);
+            var response = await this._playBuilder.MileStoneAsync(new ContextModel(this.Context, prfx, contextUser), userSettings, mileStoneAmount.amount, userInfo.Playcount, mileStoneAmount.isRandom);
+
+            await this.Context.SendResponse(this.Interactivity, response);
+            this.Context.LogCommandUsed(response.CommandResponse);
+        }
+        catch (Exception e)
+        {
+            await this.Context.HandleCommandException(e);
+        }
     }
 
     [Command("plays", RunMode = RunMode.Async)]
@@ -354,8 +376,8 @@ public class PlayCommands : BaseCommandModule
 
         _ = this.Context.Channel.TriggerTypingAsync();
 
-        var timeSettings = SettingService.GetTimePeriod(extraOptions, TimePeriod.AllTime);
-        var userSettings = await this._settingService.GetUser(timeSettings.NewSearchValue, user, this.Context, true);
+        var userSettings = await this._settingService.GetUser(extraOptions, user, this.Context, true);
+        var timeSettings = SettingService.GetTimePeriod(userSettings.NewSearchValue, TimePeriod.AllTime, timeZone: userSettings.TimeZone);
 
         var count = await this._dataSourceFactory.GetScrobbleCountFromDateAsync(userSettings.UserNameLastFm, timeSettings.TimeFrom, userSettings.SessionKeyLastFm, timeSettings.TimeUntil);
 
@@ -404,8 +426,13 @@ public class PlayCommands : BaseCommandModule
             var response = await this._playBuilder.StreakAsync(new ContextModel(this.Context, prfx, contextUser),
                 userSettings, userWithStreak);
 
-            await this.Context.SendResponse(this.Interactivity, response);
+            var responseId = await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);
+
+            if (response.FileName != null)
+            {
+                
+            }
         }
         catch (Exception e)
         {
@@ -430,7 +457,7 @@ public class PlayCommands : BaseCommandModule
             var prfx = this._prefixService.GetPrefix(this.Context.Guild?.Id);
 
             var response = await this._playBuilder.StreakHistoryAsync(new ContextModel(this.Context, prfx, contextUser),
-                userSettings);
+                userSettings, artist: userSettings.NewSearchValue);
 
             await this.Context.SendResponse(this.Interactivity, response);
             this.Context.LogCommandUsed(response.CommandResponse);

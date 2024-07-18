@@ -14,6 +14,7 @@ using FMBot.Bot.Services;
 using FMBot.Bot.Services.Guild;
 using FMBot.Bot.Services.WhoKnows;
 using FMBot.Domain;
+using FMBot.Domain.Enums;
 using FMBot.Domain.Extensions;
 using FMBot.Domain.Interfaces;
 using FMBot.Domain.Models;
@@ -152,6 +153,13 @@ public class PlayBuilder
             totalPlaycount = recentTracks.Content.TotalAmount;
         }
 
+        PublicProperties.UsedCommandsArtists.TryAdd(context.InteractionId, currentTrack.ArtistName);
+        PublicProperties.UsedCommandsTracks.TryAdd(context.InteractionId, currentTrack.TrackName);
+        if (!string.IsNullOrWhiteSpace(currentTrack.AlbumName))
+        {
+            PublicProperties.UsedCommandsAlbums.TryAdd(context.InteractionId, currentTrack.AlbumName);
+        }
+
         var requesterUserTitle = await this._userService.GetUserTitleAsync(context.DiscordGuild, context.DiscordUser);
         var embedTitle = !userSettings.DifferentUser
             ? $"{requesterUserTitle}"
@@ -159,7 +167,8 @@ public class PlayBuilder
 
         var fmText = "";
         var footerText = await this._userService.GetFooterAsync(context.ContextUser.FmFooterOptions, userSettings,
-            currentTrack.ArtistName, currentTrack.AlbumName, currentTrack.TrackName, currentTrack.Loved, totalPlaycount, guild);
+            currentTrack.ArtistName, currentTrack.AlbumName, currentTrack.TrackName, currentTrack.Loved, totalPlaycount, guild, guildUsers,
+            embedType == FmEmbedType.TextFull || embedType == FmEmbedType.TextMini);
 
         if (!userSettings.DifferentUser &&
             !currentTrack.NowPlaying &&
@@ -185,17 +194,24 @@ public class PlayBuilder
                 }
                 else if (previousTrack != null)
                 {
-                    fmText += $"**Current track**:\n";
+                    if (currentTrack.NowPlaying)
+                    {
+                        fmText += $"*{embedTitle}'s now playing:*\n";
+                    }
+                    else
+                    {
+                        fmText += $"*{embedTitle}'s last played track:*\n";
+                    }
 
                     fmText += StringService.TrackToString(currentTrack).FilterOutMentions();
 
                     fmText += $"\n" +
-                              $"**Previous track**:\n";
+                              $"*Previous:*\n";
 
                     fmText += StringService.TrackToString(previousTrack).FilterOutMentions();
                 }
 
-                var formattedFooter = footerText.Length == 0 ? "" : $"`{footerText}`";
+                var formattedFooter = footerText.Length == 0 ? "" : $"{footerText}";
                 fmText += formattedFooter;
 
                 response.ResponseType = ResponseType.Text;
@@ -209,10 +225,12 @@ public class PlayBuilder
                 }
                 else if (previousTrack != null)
                 {
-                    response.Embed.AddField("Current:",
-                        StringService.TrackToLinkedString(currentTrack, context.ContextUser.RymEnabled, false));
-                    response.Embed.AddField("Previous:",
-                        StringService.TrackToLinkedString(previousTrack, context.ContextUser.RymEnabled, false));
+                    var embedFull = new StringBuilder();
+                    embedFull.AppendLine(currentTrack.NowPlaying ? $"-# *Current:*" : $"-# *Last:*");
+                    embedFull.AppendLine(StringService.TrackToLinkedString(currentTrack, context.ContextUser.RymEnabled, false));
+                    embedFull.AppendLine("-# *Previous:*");
+                    embedFull.Append(StringService.TrackToLinkedString(previousTrack, context.ContextUser.RymEnabled, false));
+                    response.Embed.WithDescription(embedFull.ToString());
                 }
 
                 string headerText;
@@ -229,14 +247,15 @@ public class PlayBuilder
 
                 headerText += embedTitle;
 
+                response.EmbedAuthor.WithName(headerText);
+                response.EmbedAuthor.WithUrl(recentTracks.Content.UserUrl);
+
                 if (!currentTrack.NowPlaying && currentTrack.TimePlayed.HasValue)
                 {
                     footerText.AppendLine("Last scrobble:");
                     response.Embed.WithTimestamp(currentTrack.TimePlayed.Value);
                 }
 
-                response.EmbedAuthor.WithName(headerText);
-                response.EmbedAuthor.WithUrl(recentTracks.Content.UserUrl);
 
                 if (guild != null && !userSettings.DifferentUser)
                 {
@@ -387,7 +406,7 @@ public class PlayBuilder
 
             var footer = new StringBuilder();
 
-            ImportService.AddImportDescription(footer, trackPage.Last().PlaySource);
+            ImportService.AddImportDescription(footer, [trackPage.Last().PlaySource ?? PlaySource.LastFm]);
 
             footer.Append($"Page {pageCounter}/{trackPages.Count}");
             footer.Append($" - {userSettings.UserNameLastFm} has {recentTracks.Content.TotalAmount} scrobbles");
@@ -462,6 +481,7 @@ public class PlayBuilder
 
         response.EmbedAuthor.WithName($"{userSettings.DisplayName}{userSettings.UserType.UserTypeToIcon()}'s streak overview");
 
+        string emoji = null;
         if (PlayService.StreakExists(streak))
         {
             var streakText = PlayService.StreakToText(streak);
@@ -482,6 +502,21 @@ public class PlayBuilder
                     response.Embed.WithFooter($"Only streaks with {Constants.StreakSaveThreshold} plays or higher are saved.");
                 }
             }
+
+            if (!string.IsNullOrWhiteSpace(streak.ArtistName))
+            {
+                PublicProperties.UsedCommandsArtists.TryAdd(context.InteractionId, streak.ArtistName);
+            }
+            if (!string.IsNullOrWhiteSpace(streak.AlbumName))
+            {
+                PublicProperties.UsedCommandsAlbums.TryAdd(context.InteractionId, streak.AlbumName);
+            }
+            if (!string.IsNullOrWhiteSpace(streak.TrackName))
+            {
+                PublicProperties.UsedCommandsTracks.TryAdd(context.InteractionId, streak.TrackName);
+            }
+
+            emoji = PlayService.GetEmojiForStreakCount(streak.ArtistPlaycount.GetValueOrDefault());
         }
         else
         {
@@ -497,6 +532,7 @@ public class PlayBuilder
 
         response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library");
         response.Embed.WithAuthor(response.EmbedAuthor);
+        response.FileName = emoji;
 
         return response;
     }
@@ -504,7 +540,8 @@ public class PlayBuilder
     public async Task<ResponseModel> StreakHistoryAsync(
         ContextModel context,
         UserSettingsModel userSettings,
-        bool editMode = false)
+        bool editMode = false,
+        string artist = null)
     {
         var response = new ResponseModel
         {
@@ -520,9 +557,21 @@ public class PlayBuilder
 
         response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library");
 
+        if (!string.IsNullOrWhiteSpace(artist))
+        {
+            var artistFilter = artist.Trim().ToLower();
+            streaks = streaks.Where(w => w.ArtistPlaycount.HasValue &&
+                                         w.ArtistName != null &&
+                                         w.ArtistName.Trim().Contains(artistFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
         if (!streaks.Any())
         {
             response.Embed.WithDescription("No saved streaks found for this user.");
+            if (artist != null)
+            {
+                response.Embed.WithFooter($"Filtering to artist '{artist}'");
+            }
             response.ResponseType = ResponseType.Embed;
             response.CommandResponse = CommandResponse.NotFound;
             return response;
@@ -568,6 +617,11 @@ public class PlayBuilder
 
             var pageFooter = new StringBuilder();
             pageFooter.Append($"Page {pageCounter}/{streakPages.Count}");
+
+            if (!string.IsNullOrWhiteSpace(artist))
+            {
+                pageFooter.Append($" - Filtering to artist '{artist}'");
+            }
 
             if (editMode)
             {
@@ -655,9 +709,11 @@ public class PlayBuilder
         await this._updateService.UpdateUser(context.ContextUser);
 
         var timeZone = TimeZoneInfo.FindSystemTimeZoneById(userSettings.TimeZone ?? "Eastern Standard Time");
-        var week = await this._playService.GetDailyOverview(userSettings.UserId, timeZone, amount);
 
-        if (week == null)
+        var limit = SupporterService.IsSupporter(userSettings.UserType) ? 99999 : 30;
+        var dailyOverview = await this._playService.GetDailyOverview(userSettings.UserId, timeZone, limit);
+
+        if (dailyOverview == null)
         {
             response.ResponseType = ResponseType.Text;
             response.Text = "Sorry, we don't have plays for this user in the selected amount of days.";
@@ -665,58 +721,81 @@ public class PlayBuilder
             return response;
         }
 
-        var description = new StringBuilder();
-
-        foreach (var day in week.Days.OrderByDescending(o => o.Date))
-        {
-            var genreString = new StringBuilder();
-            if (day.TopGenres != null && day.TopGenres.Any())
-            {
-                for (var i = 0; i < day.TopGenres.Count; i++)
-                {
-                    if (i != 0)
-                    {
-                        genreString.Append(" - ");
-                    }
-
-                    var genre = day.TopGenres[i];
-                    genreString.Append($"{genre}");
-                }
-            }
-
-            response.Embed.AddField(
-                $"<t:{TimeZoneInfo.ConvertTimeToUtc(day.Date, timeZone).ToUnixEpochDate()}:D> - " +
-                $"{StringExtensions.GetListeningTimeString(day.ListeningTime)} - " +
-                $"{day.Playcount} {StringExtensions.GetPlaysString(day.Playcount)}",
-                $"{genreString}\n" +
-                $"{day.TopArtist}\n" +
-                $"{day.TopAlbum}\n" +
-                $"{day.TopTrack}\n"
-            );
-        }
-
-        response.Embed.WithDescription(description.ToString());
+        var dayPages = dailyOverview.Days.OrderByDescending(o => o.Date).Chunk(amount).ToList();
 
         response.EmbedAuthor.WithName($"Daily overview for {StringExtensions.Sanitize(userSettings.DisplayName)}{userSettings.UserType.UserTypeToIcon()}");
-
         response.EmbedAuthor.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library?date_preset=LAST_7_DAYS");
-        response.Embed.WithAuthor(response.EmbedAuthor);
 
-        var footer = new StringBuilder();
-
-        footer.AppendLine($"Top genres, artist, album and track for last {amount} days");
-
-        if (week.Days.Count < amount)
+        var pageCounter = 1;
+        var pages = new List<PageBuilder>();
+        foreach (var days in dayPages)
         {
-            footer.AppendLine($"{amount - week.Days.Count} days not shown because of no plays.");
+            var plays = new List<UserPlay>();
+
+            foreach (var day in days.OrderByDescending(o => o.Date))
+            {
+                var genreString = new StringBuilder();
+                if (day.TopGenres != null && day.TopGenres.Any())
+                {
+                    for (var i = 0; i < day.TopGenres.Count; i++)
+                    {
+                        if (i != 0)
+                        {
+                            genreString.Append(" - ");
+                        }
+
+                        var genre = day.TopGenres[i];
+                        genreString.Append($"{genre}");
+                    }
+                }
+
+                response.Embed.AddField(
+                    $"<t:{TimeZoneInfo.ConvertTimeToUtc(day.Date, timeZone).ToUnixEpochDate()}:D> - " +
+                    $"{StringExtensions.GetListeningTimeString(day.ListeningTime)} - " +
+                    $"{day.Playcount} {StringExtensions.GetPlaysString(day.Playcount)}",
+                    $"-# *{genreString}*\n" +
+                    $"{day.TopArtist}\n" +
+                    $"{day.TopAlbum}\n" +
+                    $"{day.TopTrack}\n"
+                );
+
+                plays.AddRange(day.Plays);
+            }
+
+            var pageFooter = new StringBuilder();
+
+            pageFooter.Append($"Page {pageCounter}/{dayPages.Count}");
+            if (amount == 7)
+            {
+                pageFooter.Append($" - 🫡");
+            }
+            pageFooter.AppendLine();
+            pageFooter.AppendLine($"Top genres, artist, album and track per {amount} days");
+            pageFooter.AppendLine(
+                $"{PlayService.GetUniqueCount(plays)} unique tracks - {plays.Count} total plays - avg {Math.Round(PlayService.GetAvgPerDayCount(plays), 1)} per day");
+
+            if (days.Count() < amount)
+            {
+                pageFooter.AppendLine($"{amount - days.Count()} days not shown because of no plays.");
+            }
+
+            pages.Add(new PageBuilder()
+                .WithFields(response.Embed.Fields)
+                .WithAuthor(response.EmbedAuthor)
+                .WithFooter(pageFooter.ToString()));
+            pageCounter++;
+            response.Embed.Fields = new();
         }
 
-        footer.AppendLine(
-            $"{week.Uniques} unique tracks - {week.Playcount} total plays - avg {Math.Round(week.AvgPerDay, 1)} per day");
-
-        response.EmbedFooter.WithText(footer.ToString());
-        response.Embed.WithFooter(response.EmbedFooter);
-
+        if (SupporterService.IsSupporter(userSettings.UserType))
+        {
+            response.StaticPaginator = StringService.BuildStaticPaginator(pages);
+        }
+        else
+        {
+            response.StaticPaginator = StringService.BuildSimpleStaticPaginator(pages);
+        }
+        response.ResponseType = ResponseType.Paginator;
         return response;
     }
 
@@ -794,7 +873,8 @@ public class PlayBuilder
         ContextModel context,
         UserSettingsModel userSettings,
         int mileStoneAmount,
-        long userTotalPlaycount)
+        long userTotalPlaycount,
+        bool isRandom = false)
     {
         var response = new ResponseModel
         {
@@ -834,6 +914,27 @@ public class PlayBuilder
             response.Embed.WithUrl($"{LastfmUrlExtensions.GetUserUrl(userSettings.UserNameLastFm)}/library?from={dateString}&to={dateString}");
 
             reply.AppendLine($"Date played: **<t:{mileStonePlay.Content.TimePlayed.Value.ToUnixEpochDate()}:D>**");
+
+            PublicProperties.UsedCommandsArtists.TryAdd(context.InteractionId, mileStonePlay.Content.ArtistName);
+            PublicProperties.UsedCommandsTracks.TryAdd(context.InteractionId, mileStonePlay.Content.TrackName);
+            if (!string.IsNullOrWhiteSpace(mileStonePlay.Content.AlbumName))
+            {
+                PublicProperties.UsedCommandsAlbums.TryAdd(context.InteractionId, mileStonePlay.Content.AlbumName);
+            }
+
+            response.ReferencedMusic = new ReferencedMusic
+            {
+                Artist = mileStonePlay.Content.ArtistName,
+                Album = mileStonePlay.Content.AlbumName,
+                Track = mileStonePlay.Content.TrackName,
+            };
+        }
+
+        if (isRandom)
+        {
+            response.Components = new ComponentBuilder().WithButton("Reroll",
+                $"{InteractionConstants.RandomMilestone}-{userSettings.DiscordUserId}-{context.ContextUser.DiscordUserId}",
+                style: ButtonStyle.Secondary, emote: new Emoji("🎲"));
         }
 
         response.Embed.WithDescription(reply.ToString());
@@ -1072,6 +1173,7 @@ public class PlayBuilder
             fields = new List<EmbedFieldBuilder>();
 
             var allPlays = await this._playService.GetAllUserPlays(userSettings.UserId);
+            allPlays = (await this._timeService.EnrichPlaysWithPlayTime(allPlays)).enrichedPlays;
 
             var filter = new DateTime(year, 01, 01);
             var endFilter = new DateTime(year, 12, 12, 23, 59, 59);
@@ -1100,9 +1202,12 @@ public class PlayBuilder
             {
                 var newArtist = topNewArtists.OrderBy(o => o.FirstPlay).ToList()[i];
 
-                newArtistDescription.AppendLine($"**[{StringExtensions.TruncateLongString(newArtist.ArtistName, 28)}]({LastfmUrlExtensions.GetArtistUrl(newArtist.ArtistName)})** " +
-                                                $"— *{newArtist.UserPlaycount} {StringExtensions.GetPlaysString(newArtist.UserPlaycount)}* " +
-                                                $"— on **<t:{newArtist.FirstPlay.Value.ToUnixEpochDate()}:D>**");
+                if (newArtistDescription.Length < 800)
+                {
+                    newArtistDescription.AppendLine($"**[{StringExtensions.TruncateLongString(newArtist.ArtistName, 28)}]({LastfmUrlExtensions.GetArtistUrl(newArtist.ArtistName)})** " +
+                                                    $"— *{newArtist.UserPlaycount} {StringExtensions.GetPlaysString(newArtist.UserPlaycount)}* " +
+                                                    $"— on **<t:{newArtist.FirstPlay.Value.ToUnixEpochDate()}:D>**");
+                }
             }
 
             fields.Add(new EmbedFieldBuilder().WithName("Artist discoveries")
@@ -1114,7 +1219,7 @@ public class PlayBuilder
                 .OrderBy(o => o.TimePlayed)
                 .GroupBy(g => new { g.TimePlayed.Month, g.TimePlayed.Year });
 
-            var totalPlayTime = await this._timeService.GetPlayTimeForPlays(allPlays.Where(w => w.TimePlayed >= filter && w.TimePlayed <= endFilter));
+            var totalPlayTime = TimeService.GetPlayTimeForEnrichedPlays(allPlays.Where(w => w.TimePlayed >= filter && w.TimePlayed <= endFilter));
             monthDescription.AppendLine(
                 $"**`All`** " +
                 $"- **{allPlays.Count(w => w.TimePlayed >= filter && w.TimePlayed <= endFilter)}** plays " +
@@ -1127,7 +1232,7 @@ public class PlayBuilder
                     break;
                 }
 
-                var time = await this._timeService.GetPlayTimeForPlays(month);
+                var time = TimeService.GetPlayTimeForEnrichedPlays(month);
                 monthDescription.AppendLine(
                     $"**`{CultureInfo.CurrentCulture.DateTimeFormat.GetAbbreviatedMonthName(month.Key.Month)}`** " +
                     $"- **{month.Count()}** plays " +
