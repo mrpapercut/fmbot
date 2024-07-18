@@ -172,10 +172,15 @@ public class FeaturedService
                     var albumFound = false;
                     var i = 0;
 
-                    if (albumList.Count() > 0)
+                    if (albumList.Count > 0)
                     {
                         while (!albumFound)
                         {
+                            if (i >= albumList.Count)
+                            {
+                                break;
+                            }
+
                             var currentAlbum = albumList[i];
 
                             if (currentAlbum.AlbumCoverUrl != null &&
@@ -184,7 +189,7 @@ public class FeaturedService
                                 await AlbumNotFeaturedRecently(currentAlbum.AlbumName, currentAlbum.ArtistName) &&
                                 await AlbumPopularEnough(currentAlbum.AlbumName, currentAlbum.ArtistName))
                             {
-                            var artistLink = LastfmUrlExtensions.GetArtistUrl(currentAlbum.ArtistName);
+                                var artistLink = LastfmUrlExtensions.GetArtistUrl(currentAlbum.ArtistName);
                                 if (supporterDay)
                                 {
                                     featuredLog.Description = $"[{currentAlbum.AlbumName}]({currentAlbum.AlbumUrl}) \n" +
@@ -428,10 +433,10 @@ public class FeaturedService
         var users = db.Users
             .AsQueryable()
             .Where(w => w.Blocked != true).ToList(); // &&
-                        // !lastFmUsersToFilter.Contains(w.UserNameLastFM.ToLower()) &&
-                        // (!supportersOnly || w.UserType == UserType.Supporter) &&
-                        // w.LastUsed != null &&
-                        // w.LastUsed > filterDate).ToList();
+                                                     // !lastFmUsersToFilter.Contains(w.UserNameLastFM.ToLower()) &&
+                                                     // (!supportersOnly || w.UserType == UserType.Supporter) &&
+                                                     // w.LastUsed != null &&
+                                                     // w.LastUsed > filterDate).ToList();
 
         // Great coding for staff that also has supporter
         if (supportersOnly)
